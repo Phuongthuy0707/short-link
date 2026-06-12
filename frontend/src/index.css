@@ -1,0 +1,44 @@
+/* Kích hoạt cấu hình hệ thống Tailwind CSS v4.0 chuẩn ES */
+@import "tailwindcss";
+
+/* Import Font chữ từ Google Fonts phục vụ layout Cyberpunk */
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap');
+
+/* Định nghĩa bảng màu (Variables CSS) của Dashboard */
+:root {
+  --bg: #0a0a0f;
+  --surface: #111118;
+  --surface2: #18181f;
+  --surface3: #1e1e28;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --accent: #6c5ce7;
+  --accent2: #a29bfe;
+  --accent3: #fd79a8;
+  --teal: #00cec9;
+  --amber: #fdcb6e;
+  --green: #55efc4;
+  --red: #ff7675;
+  --text: #e8e8f0;
+  --muted: #7a7a9a;
+  --dim: #4a4a6a;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Syne', sans-serif;
+  overflow-x: hidden;
+}
+
+/* Các class hiệu ứng viền màu Neon trên đỉnh của các Thẻ thống kê (Stat Card) */
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+.stat-card.c1::before { background: var(--accent2); }
+.stat-card.c2::before { background: var(--teal); }
+.stat-card.c3::before { background: var(--amber); }
+.stat-card.c4::before { background: var(--green); }
