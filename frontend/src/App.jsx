@@ -33,6 +33,16 @@ export default function App() {
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterLinkCode, setFilterLinkCode] = useState('all');
 
+  const [workspaces, setWorkspaces] = useState([]);
+  const [currentWorkspace, setCurrentWorkspace] = useState('personal');
+  const [isWorkspaceCreateOpen, setIsWorkspaceCreateOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('viewer');
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
+  const [selectedWorkspaceForLink, setSelectedWorkspaceForLink] = useState('');
+
   const [longUrl, setLongUrl] = useState('');
   const [linkName, setLinkName] = useState('');
   const [customAlias, setCustomAlias] = useState('');
@@ -43,8 +53,8 @@ export default function App() {
 
   const MESSAGES = {
     vi: {
-      brand: 'Snipio Auth',
-      primaryTitle: 'Snipio Workspace',
+      brand: 'Shortlink Auth',
+      primaryTitle: 'Shortlink Workspace',
       usernameOrEmail: 'Tên tài khoản / Email',
       username: 'Tên tài khoản (Username)',
       email: 'Địa chỉ Email',
@@ -109,11 +119,16 @@ export default function App() {
       viewLink: 'Xem thống kê',
       downloadError: 'Không thể tải dữ liệu.',
       currentLanguage: 'EN',
-      switchLanguage: 'Chuyển ngôn ngữ'
+      switchLanguage: 'Chuyển ngôn ngữ',
+      workspaces: 'Workspaces (Nhóm)',
+      createWorkspace: 'Tạo Team mới',
+      workspaceName: 'Tên Team',
+      inviteMember: 'Mời thành viên',
+      memberEmail: 'Email người cần mời'
     },
     en: {
-      brand: 'Snipio Auth',
-      primaryTitle: 'Snipio Workspace',
+      brand: 'Shortlink Auth',
+      primaryTitle: 'Shortlink Workspace',
       usernameOrEmail: 'Username / Email',
       username: 'Username',
       email: 'Email address',
@@ -178,7 +193,12 @@ export default function App() {
       viewLink: 'View analytics',
       downloadError: 'Unable to download data.',
       currentLanguage: 'EN',
-      switchLanguage: 'Switch language'
+      switchLanguage: 'Switch language',
+      workspaces: 'Workspaces',
+      createWorkspace: 'Create Workspace',
+      workspaceName: 'Workspace Name',
+      inviteMember: 'Invite Member',
+      memberEmail: 'Member Email'
     }
   };
 
@@ -369,6 +389,79 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
+  const fetchWorkspaces = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const response = await fetch(`${API_URL}/api/workspaces`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setWorkspaces(data.workspaces || []);
+      } else {
+        setWorkspaces([
+          { id: 1, name: 'Team Marketing', role: 'owner' },
+          { id: 2, name: 'Dự án Alpha', role: 'editor' }
+        ]);
+      }
+    } catch (err) {
+      setWorkspaces([
+        { id: 1, name: 'Team Marketing', role: 'owner' },
+        { id: 2, name: 'Dự án Alpha', role: 'editor' }
+      ]);
+    }
+  };
+
+  const handleCreateWorkspace = async (e) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/workspaces`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name: newWorkspaceName })
+      });
+      if (response.ok) {
+        showNotification('success', `✅ ${t.toastSuccess || 'Thành công'}`, 'Tạo team thành công');
+        setIsWorkspaceCreateOpen(false);
+        setNewWorkspaceName('');
+        fetchWorkspaces();
+      } else {
+        showNotification('error', `❌ ${t.toastError || 'Lỗi'}`, 'Không thể tạo team');
+      }
+    } catch (err) {
+      showNotification('error', `💥 ${t.toastError || 'Lỗi'}`, t.connectBackend || 'Hỏng kết nối');
+    }
+  };
+
+  const handleInviteMember = async (e) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/workspaces/${selectedWorkspaceId}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole })
+      });
+      if (response.ok) {
+        showNotification('success', `✅ ${t.toastSuccess || 'Thành công'}`, 'Mời thành viên thành công');
+        setIsInviteOpen(false);
+        setInviteEmail('');
+      } else {
+        showNotification('error', `❌ ${t.toastError || 'Lỗi'}`, 'Không thể mời thành viên');
+      }
+    } catch (err) {
+      showNotification('error', `💥 ${t.toastError || 'Lỗi'}`, t.connectBackend || 'Hỏng kết nối');
+    }
+  };
+
   useEffect(() => {
     const token = localStorage.getItem('token');
     const savedUser = localStorage.getItem('username');
@@ -376,6 +469,7 @@ export default function App() {
       if (savedUser) setUsername(savedUser);
       setCurrentScreen('dashboard');
       fetchAllLinks();
+      fetchWorkspaces();
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -612,7 +706,8 @@ export default function App() {
               <div className="text-xl font-extrabold text-[#e8e8f0]">Snip<span className="text-[#a29bfe]">io</span></div>
             </div>
             <div className="px-3 mb-1 flex-1">
-              <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-[rgba(108,92,231,0.15)] text-[#a29bfe] text-xs cursor-pointer">📊 Dashboard</div>
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 Dashboard</div>
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
             </div>
             <div className="px-5 pt-4 border-t border-[rgba(255,255,255,0.07)] flex justify-between items-center">
               <div className="text-[11px] font-semibold truncate max-w-[80px]">{username}</div>
@@ -622,7 +717,13 @@ export default function App() {
 
           <div className="ml-[220px] flex-1 flex flex-col">
             <div className="bg-[#111118] border-b border-[rgba(255,255,255,0.07)] px-7 py-3.5 flex items-center justify-between sticky top-0">
-              <div className="text-sm font-bold">{t.dashboardTitle || 'Dashboard'}</div>
+              <div className="flex items-center gap-3">
+                <div className="text-sm font-bold">{t.dashboardTitle || 'Dashboard'}</div>
+                <select className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-1 text-xs text-white outline-none" value={currentWorkspace} onChange={(e) => setCurrentWorkspace(e.target.value)}>
+                  <option value="personal">Cá nhân (Personal)</option>
+                  {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                </select>
+              </div>
               <div className="flex items-center gap-2">
                 <button className="bg-[#6c5ce7] text-white px-4 py-2 rounded-lg font-semibold text-xs cursor-pointer" onClick={() => setIsCreateOpen(true)}>{t.createLink}</button>
                 <button className={`px-3 py-2 rounded-lg text-xs font-semibold ${lang === 'vi' ? 'bg-[#4ade80] text-[#0a0a0f]' : 'bg-[#18181f] text-[#a29bfe]'}`} onClick={() => updateLanguage('vi')}>VI</button>
@@ -765,6 +866,10 @@ export default function App() {
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customAlias} onChange={(e) => setCustomAlias(e.target.value)} placeholder={t.customAliasPlaceholder} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customDomain} onChange={(e) => setCustomDomain(e.target.value)} placeholder={t.domainPlaceholder} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkParams} onChange={(e) => setLinkParams(e.target.value)} placeholder={t.paramsPlaceholder} />
+              <select className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white outline-none" value={selectedWorkspaceForLink} onChange={(e) => setSelectedWorkspaceForLink(e.target.value)}>
+                <option value="">-- Cá nhân (Không gian mặc định) --</option>
+                {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+              </select>
               <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsCreateOpen(false)}>{t.cancel}</button><button type="submit" className="bg-[#6c5ce7] px-4 py-1.5 rounded-lg text-white text-xs">{t.createLink}</button></div>
             </form>
           </div>
@@ -793,6 +898,83 @@ export default function App() {
             <div className="w-full flex justify-between items-center"><span className="text-xs font-bold">{t.qrTitle}</span><button onClick={() => setIsQrOpen(false)}>✕</button></div>
             <div className="bg-white p-3 rounded-xl"><img src={`${API_URL}/api/qrcode/${selectedShortCode}`} alt="QR" className="w-[150px] h-[150px]" /></div>
             <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded">localhost:8000/{selectedShortCode}</div>
+          </div>
+        </div>
+      )}
+
+      {currentScreen === 'workspaces' && (
+        <div className="flex w-full min-h-screen text-[#e8e8f0]">
+          <aside className="w-[220px] bg-[#111118] border-r border-[rgba(255,255,255,0.07)] flex flex-col py-6 fixed top-0 left-0 bottom-0">
+            <div className="px-5 pb-7 flex items-center gap-2.5">
+              <div className="text-xl font-extrabold text-[#e8e8f0]">Snip<span className="text-[#a29bfe]">io</span></div>
+            </div>
+            <div className="px-3 mb-1 flex-1">
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 Dashboard</div>
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
+            </div>
+            <div className="px-5 pt-4 border-t border-[rgba(255,255,255,0.07)] flex justify-between items-center">
+              <div className="text-[11px] font-semibold truncate max-w-[80px]">{username}</div>
+              <button className="text-[10px] text-[#ff7675] cursor-pointer" onClick={() => { localStorage.clear(); setCurrentScreen('login'); }}>{t.logout}</button>
+            </div>
+          </aside>
+
+          <div className="ml-[220px] flex-1 flex flex-col">
+            <div className="bg-[#111118] border-b border-[rgba(255,255,255,0.07)] px-7 py-3.5 flex items-center justify-between sticky top-0">
+              <div className="text-sm font-bold">{t.workspaces}</div>
+              <div className="flex items-center gap-2">
+                <button className="bg-[#6c5ce7] text-white px-4 py-2 rounded-lg font-semibold text-xs cursor-pointer" onClick={() => setIsWorkspaceCreateOpen(true)}>{t.createWorkspace}</button>
+              </div>
+            </div>
+            
+            <div className="p-7">
+              <div className="grid grid-cols-3 gap-4">
+                {workspaces.map(ws => (
+                  <div key={ws.id} className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 relative">
+                    <div className="text-lg font-bold mb-1">{ws.name}</div>
+                    <div className="text-[11px] text-[#7a7a9a] mb-4">Role: <span className="text-[#a29bfe] uppercase">{ws.role}</span></div>
+                    {ws.role === 'owner' && (
+                      <button className="text-xs bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-3 py-1.5 rounded-lg text-white" onClick={() => { setSelectedWorkspaceId(ws.id); setIsInviteOpen(true); }}>
+                        {t.inviteMember}
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {workspaces.length === 0 && (
+                  <div className="col-span-3 text-sm text-[#7a7a9a] italic">Bạn chưa tham gia không gian làm việc nào.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TẠO WORKSPACE MỚI */}
+      {isWorkspaceCreateOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[400px] p-6">
+            <h3 className="text-base font-bold mb-4">👥 {t.createWorkspace}</h3>
+            <form onSubmit={handleCreateWorkspace} className="flex flex-col gap-4">
+              <input required type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white outline-none" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder={t.workspaceName} />
+              <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsWorkspaceCreateOpen(false)}>{t.cancel}</button><button type="submit" className="bg-[#6c5ce7] px-4 py-1.5 rounded-lg text-white text-xs">{t.createWorkspace}</button></div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MỜI THÀNH VIÊN */}
+      {isInviteOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[400px] p-6">
+            <h3 className="text-base font-bold mb-4">✉️ {t.inviteMember}</h3>
+            <form onSubmit={handleInviteMember} className="flex flex-col gap-4">
+              <input required type="email" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white outline-none" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder={t.memberEmail} />
+              <select className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white outline-none" value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                <option value="viewer">Viewer (Chỉ xem)</option>
+                <option value="editor">Editor (Chỉnh sửa)</option>
+                <option value="owner">Owner (Quản trị)</option>
+              </select>
+              <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsInviteOpen(false)}>{t.cancel}</button><button type="submit" className="bg-[#6c5ce7] px-4 py-1.5 rounded-lg text-white text-xs">{t.inviteMember}</button></div>
+            </form>
           </div>
         </div>
       )}

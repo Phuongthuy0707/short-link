@@ -29,7 +29,7 @@ for alter_sql in [
 
 app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao")
 
-# --- CẤU HÌNH CỦA CỔNG BẢO MẬT CORS CHUẨN (ĐÃ GOM GỌN) ---
+# --- CẤU HÌNH CỦA CỔNG BẢO MẬT CORS CHUẨN ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # Cho phép Frontend kết nối thoải mái từ mọi cổng mạng local
@@ -42,7 +42,7 @@ app.add_middleware(
 def read_root():
     return {"message": "Backend đã sẵn sàng cho các API chức năng!"}
 
-# --- API ĐĂNG KÝ TÀI KHOẢN (BẢN VÁ LỖI ATTRIBUTE) ---
+# --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
     # Kiểm tra an toàn: Nếu bảng User có trường username thì lọc theo username, ngược lại lọc theo email
@@ -57,7 +57,7 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
     
     hashed_pwd = utils.hash_password(payload.password)
     
-    # Khởi tạo đối tượng User linh hoạt theo cấu trúc DB của bạn
+    # Khởi tạo đối tượng User linh hoạt theo cấu trúc DB
     new_user = models.User(email=payload.email, password_hash=hashed_pwd)
     if hasattr(models.User, 'username'):
         setattr(new_user, 'username', payload.username)
@@ -67,7 +67,7 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
     db.refresh(new_user)
     return {"status": "success", "message": "Đăng ký tài khoản thành công!", "user_id": new_user.id}
 
-# --- API ĐĂNG NHẬP CHUẨN OAUTH2 (BẢN VÁ LỖI ATTRIBUTE) ---
+# --- API ĐĂNG NHẬP (Fix ATTRIBUTE) ---
 @app.post("/api/auth/token")
 def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     # Tìm kiếm linh hoạt: nếu model có `username` thì dò cả `username` hoặc `email`.
@@ -115,10 +115,10 @@ def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_d
             f"Vui lòng nhấn vào liên kết sau để đặt lại mật khẩu (hoặc dán vào trình duyệt):\n\n"
             f"{reset_link}\n\n"
             f"Nếu bạn không yêu cầu, vui lòng bỏ qua email này.\n\n"
-            f"Trân trọng,\nSnipio Team"
+            f"Trân trọng,\nShortlink Team"
         )
         utils.send_email(
-            subject="[Snipio] Đặt lại mật khẩu",
+            subject="[Shortlink] Đặt lại mật khẩu",
             body=email_body,
             to_email=user.email
         )
@@ -379,6 +379,24 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     except jwt.PyJWTError:
         raise credentials_exception
     
+@app.get("/api/workspaces")
+def get_workspaces(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user["id"]).all()
+    workspace_ids = [m.workspace_id for m in memberships]
+    workspaces = db.query(models.Workspace).filter(models.Workspace.id.in_(workspace_ids)).all()
+    
+    result = []
+    for ws in workspaces:
+        # Tìm role của user trong workspace này
+        role = next((m.role_in_workspace for m in memberships if m.workspace_id == ws.id), "viewer")
+        result.append({
+            "id": ws.id,
+            "name": ws.name,
+            "role": role,
+            "created_at": ws.created_at.isoformat() if ws.created_at else None
+        })
+    return {"status": "success", "workspaces": result}
+
 @app.post("/api/workspaces", status_code=status.HTTP_201_CREATED)
 def create_workspace(payload: schemas.WorkspaceCreate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     new_workspace = models.Workspace(name=payload.name, created_by=current_user["id"])
@@ -460,12 +478,12 @@ def update_link(short_code: str, payload: schemas.LinkUpdate, db: Session = Depe
         }
     }
 
-# --- API QUÉT CẢNH BÁO TRAFFIC BẤT THƯỜNG (ANOMALY DETECTION - ĐÃ SỬA LỖI ATTRIBUTE) ---
+# --- API QUÉT CẢNH BÁO TRAFFIC BẤT THƯỜNG (ANOMALY DETECTION - Fix ATTRIBUTE) ---
 @app.get("/api/system/alerts")
 def get_system_alerts(db: Session = Depends(get_db)):
     five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
     
-    # Tự động dò tìm cột thời gian thực tế trong database của bạn
+    # Tự động dò tìm cột thời gian thực tế trong database
     time_column = models.ClickLog.id
     if hasattr(models.ClickLog, 'clicked_at'):
         time_column = models.ClickLog.clicked_at
@@ -518,12 +536,11 @@ def get_dashboard_analytics(
             end = datetime.fromisoformat(end_date) + timedelta(days=1)
             query = query.filter(models.ClickLog.created_at >= start, models.ClickLog.created_at < end)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Định dạng ngày không hợp lệ (ISO 8601)")
+            raise HTTPException(status_code=400, detail="Định dạng ngày không hợp lệ")
 
     total_clicks = query.count()
     
     # Thống kê theo ngày để vẽ biểu đồ xu hướng
-    # Đối với SQLite, dùng strftime
     trend_stats = db.query(
         func.strftime('%Y-%m-%d', models.ClickLog.created_at).label('day'),
         func.count(models.ClickLog.id).label('count')
