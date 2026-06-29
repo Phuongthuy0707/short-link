@@ -377,6 +377,13 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
+  const handleAuthExpiry = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    setCurrentScreen('login');
+    showNotification('error', '⚠️ Phiên đăng nhập hết hạn', 'Vui lòng đăng nhập lại.');
+  };
+
   const fetchLinkAnalytics = async (shortCode = filterLinkCode || 'all') => {
     try {
       const queryString = buildAnalyticsQuery();
@@ -400,12 +407,17 @@ export default function App() {
         const data = await response.json();
         setWorkspaces(data.workspaces || []);
       } else {
+        if (response.status === 401) {
+          handleAuthExpiry();
+          return;
+        }
         setWorkspaces([
           { id: 1, name: 'Team Marketing', role: 'owner' },
           { id: 2, name: 'Dự án Alpha', role: 'editor' }
         ]);
       }
     } catch (err) {
+      console.error(err);
       setWorkspaces([
         { id: 1, name: 'Team Marketing', role: 'owner' },
         { id: 2, name: 'Dự án Alpha', role: 'editor' }
@@ -431,9 +443,14 @@ export default function App() {
         setNewWorkspaceName('');
         fetchWorkspaces();
       } else {
+        if (response.status === 401) {
+          handleAuthExpiry();
+          return;
+        }
         showNotification('error', `❌ ${t.toastError || 'Lỗi'}`, 'Không thể tạo team');
       }
     } catch (err) {
+      console.error(err);
       showNotification('error', `💥 ${t.toastError || 'Lỗi'}`, t.connectBackend || 'Hỏng kết nối');
     }
   };
@@ -455,9 +472,14 @@ export default function App() {
         setIsInviteOpen(false);
         setInviteEmail('');
       } else {
+        if (response.status === 401) {
+          handleAuthExpiry();
+          return;
+        }
         showNotification('error', `❌ ${t.toastError || 'Lỗi'}`, 'Không thể mời thành viên');
       }
     } catch (err) {
+      console.error(err);
       showNotification('error', `💥 ${t.toastError || 'Lỗi'}`, t.connectBackend || 'Hỏng kết nối');
     }
   };
@@ -502,7 +524,8 @@ export default function App() {
           name: linkName || null,
           alias: customAlias || null,
           domain: customDomain || null,
-          params: linkParams || null
+          params: linkParams || null,
+          workspace_id: selectedWorkspaceForLink ? parseInt(selectedWorkspaceForLink) : null
         })
       });
       const data = await response.json();

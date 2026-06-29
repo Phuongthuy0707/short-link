@@ -90,6 +90,7 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
     access_token = utils.create_access_token(
         data={"user_id": user.id, "email": user_email, "role": user.role if hasattr(user, 'role') else "user"}
     )
+    print(f"Generated Token: {access_token}")
     return {
         "status": "success",
         "message": "Đăng nhập thành công!",
@@ -364,24 +365,37 @@ def export_link_clicks(short_code: str, db: Session = Depends(get_db)):
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Phiên đăng nhập không hợp lệ hoặc đã hết hạn!",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        print(f"Token: {token}")
         payload = jwt.decode(token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
+        print(f"Payload: {payload}")
         user_id: int = payload.get("user_id")
+        print(f"User ID: {user_id}")
         if user_id is None:
             raise credentials_exception
-        return {"id": user_id}
-    except jwt.PyJWTError:
+        
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        print(f"User: {user}")
+        if user is None:
+            raise credentials_exception
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token đã hết hạn, vui lòng đăng nhập lại")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token không hợp lệ")
+    except Exception as e:
+        print(e)
         raise credentials_exception
     
 @app.get("/api/workspaces")
-def get_workspaces(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user["id"]).all()
+def get_workspaces(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user.id).all()
     workspace_ids = [m.workspace_id for m in memberships]
     workspaces = db.query(models.Workspace).filter(models.Workspace.id.in_(workspace_ids)).all()
     
@@ -398,20 +412,20 @@ def get_workspaces(current_user: dict = Depends(get_current_user), db: Session =
     return {"status": "success", "workspaces": result}
 
 @app.post("/api/workspaces", status_code=status.HTTP_201_CREATED)
-def create_workspace(payload: schemas.WorkspaceCreate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    new_workspace = models.Workspace(name=payload.name, created_by=current_user["id"])
+def create_workspace(payload: schemas.WorkspaceCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    new_workspace = models.Workspace(name=payload.name, created_by=current_user.id)
     db.add(new_workspace)
     db.commit()
     db.refresh(new_workspace)
     
-    member_role = models.WorkspaceMember(workspace_id=new_workspace.id, user_id=current_user["id"], role_in_workspace="owner")
+    member_role = models.WorkspaceMember(workspace_id=new_workspace.id, user_id=current_user.id, role_in_workspace="owner")
     db.add(member_role)
     db.commit()
     return {"status": "success", "message": "Tạo Không gian làm việc thành công!", "workspace_id": new_workspace.id}
 
 @app.post("/api/workspaces/{workspace_id}/invite")
-def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    checker = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == current_user["id"]).first()
+def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    checker = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == current_user.id).first()
     if not checker or checker.role_in_workspace != "owner":
         raise HTTPException(status_code=403, detail="Bạn không có quyền mời thành viên!")
         
@@ -429,8 +443,8 @@ def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_u
     return {"status": "success", "message": "Mời thành công!"}
 
 @app.get("/api/workspaces/{workspace_id}/links")
-def get_workspace_links(workspace_id: int, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    is_member = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == current_user["id"]).first()
+def get_workspace_links(workspace_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    is_member = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == current_user.id).first()
     if not is_member:
         raise HTTPException(status_code=403, detail="Từ chối truy cập không gian!")
     links = db.query(models.Link).filter(models.Link.workspace_id == workspace_id).all()
