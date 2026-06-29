@@ -15,7 +15,7 @@ SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "no-reply@snipio.local")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "no-reply@slinktrack.local")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 SEND_RESET_LINK_IN_RESPONSE = os.getenv("SEND_RESET_LINK_IN_RESPONSE", "false").lower() in ("1", "true", "yes")
 

@@ -15,7 +15,8 @@ class ForgotPassword(BaseModel):
     email: EmailStr
 
 class ResetPassword(BaseModel):
-    token: str
+    email: EmailStr
+    otp: str
     new_password: str
 
 class TokenData(BaseModel):
@@ -44,5 +45,8 @@ class WorkspaceCreate(BaseModel):
     name: str
 
 class WorkspaceInvite(BaseModel):
-    email: EmailStr
+    email: str
+    role_in_workspace: str
+
+class WorkspaceMemberUpdate(BaseModel):
     role_in_workspace: str = "viewer"  # owner, editor, viewer

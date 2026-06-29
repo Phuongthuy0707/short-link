@@ -9,6 +9,8 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False) # Mã hóa mật khẩu bằng bcrypt
     role = Column(String, default="member") # admin, member, guest
+    reset_otp = Column(String, nullable=True)
+    reset_otp_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 # Bảng 2: Quản lý Nhóm / Đội ngũ (Workspace)
@@ -31,7 +33,7 @@ class WorkspaceMember(Base):
 class Domain(Base):
     __tablename__ = "domains"
     id = Column(Integer, primary_key=True, index=True)
-    domain_name = Column(String, unique=True, nullable=False) # Ví dụ: snip.io, brand.vn
+    domain_name = Column(String, unique=True, nullable=False) # Ví dụ: slinktrack.io, brand.vn
     workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True) # Domain chung hoặc của nhóm nào
     created_at = Column(DateTime, default=func.now())
 
@@ -43,6 +45,7 @@ class Link(Base):
     short_code = Column(String, unique=True, index=True, nullable=False) # Hậu tố rút gọn (alias)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=True) # Khớp với custom domain
     workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True) # Thuộc nhóm nào quản lý
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Người tạo ra link này
     name = Column(String, nullable=True) # Tên link để hiển thị thay cho shortlink
     status = Column(String, default="active") # active, paused
     password_hash = Column(String, nullable=True) # Mật khẩu bảo vệ link nếu có
@@ -64,3 +67,13 @@ class ClickLog(Base):
     traffic_source = Column(String, default="Direct (Trực tiếp)") # Facebook, Google, YouTube, Direct
     referer = Column(Text)
     created_at = Column(DateTime, default=func.now()) # Mốc thời gian cốt lõi để làm bộ lọc Ngày/Giờ/Tháng
+
+# Bảng 7: Lưu lịch sử chỉnh sửa thời gian hết hạn của link
+class LinkEditHistory(Base):
+    __tablename__ = "link_edit_histories"
+    id = Column(Integer, primary_key=True, index=True)
+    link_id = Column(Integer, ForeignKey("links.id"), nullable=False)
+    old_expired_at = Column(DateTime, nullable=True)
+    new_expired_at = Column(DateTime, nullable=True)
+    edited_at = Column(DateTime, default=func.now())
+    edited_by = Column(Integer, ForeignKey("users.id"), nullable=True)

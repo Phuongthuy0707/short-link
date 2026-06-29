@@ -38,6 +38,52 @@ app.add_middleware(
     allow_headers=["*"], 
 )
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Phiên đăng nhập không hợp lệ hoặc đã hết hạn!",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        print(f"Token: {token}")
+        payload = jwt.decode(token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
+        print(f"Payload: {payload}")
+        user_id: int = payload.get("user_id")
+        print(f"User ID: {user_id}")
+        if user_id is None:
+            raise credentials_exception
+        
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        print(f"User: {user}")
+        if user is None:
+            raise credentials_exception
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token đã hết hạn, vui lòng đăng nhập lại")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token không hợp lệ")
+    except Exception as e:
+        print(e)
+        raise credentials_exception
+    
+def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    try:
+        scheme, token = auth_header.split(" ", 1)
+        if scheme.lower() != "bearer":
+            return None
+        payload = jwt.decode(token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
+        user_id: int = payload.get("user_id")
+        if user_id is None:
+            return None
+        return db.query(models.User).filter(models.User.id == user_id).first()
+    except Exception:
+        return None
+
 @app.get("/")
 def read_root():
     return {"message": "Backend đã sẵn sàng cho các API chức năng!"}
@@ -78,11 +124,11 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
         user = db.query(models.User).filter(models.User.email == username).first()
         
     if not user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản hoặc mật khẩu không chính xác!")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản này không tồn tại!")
     
     is_password_correct = utils.verify_password(password, user.password_hash)
     if not is_password_correct:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản hoặc mật khẩu không chính xác!")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mật khẩu không chính xác!")
     
     user_email = user.email if hasattr(user, 'email') else ""
     user_username = user.username if hasattr(user, 'username') else username
@@ -103,53 +149,73 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
 def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == payload.email).first()
     if not user:
-        # Không tiết lộ thông tin người dùng, trả về thành công chung
-        return {"status": "success", "message": "Nếu tài khoản tồn tại, đường dẫn đặt lại mật khẩu sẽ được gửi."}
+        return {"status": "success", "message": "Nếu tài khoản tồn tại, mã OTP đặt lại mật khẩu đã được gửi."}
 
-    token = utils.create_password_reset_token({"user_id": user.id, "email": user.email})
-    reset_link = f"{utils.FRONTEND_URL}/reset-password?token={token}"
+    # Sinh mã OTP gồm 6 chữ số ngẫu nhiên
+    import random
+    otp = f"{random.randint(100000, 999999)}"
+    
+    # Lưu OTP và thời gian hết hạn (5 phút) vào DB
+    user.reset_otp = otp
+    user.reset_otp_expires_at = datetime.utcnow() + timedelta(minutes=5)
+    db.commit()
 
+    email_sent = True
+    error_msg = ""
     try:
         email_body = (
             f"Xin chào,\n\n"
             f"Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu cho tài khoản này.\n"
-            f"Vui lòng nhấn vào liên kết sau để đặt lại mật khẩu (hoặc dán vào trình duyệt):\n\n"
-            f"{reset_link}\n\n"
+            f"Mã OTP xác thực đặt lại mật khẩu của bạn là:\n\n"
+            f"          {otp}\n\n"
+            f"Mã OTP này có hiệu lực trong vòng 5 phút.\n"
             f"Nếu bạn không yêu cầu, vui lòng bỏ qua email này.\n\n"
-            f"Trân trọng,\nShortlink Team"
+            f"Trân trọng,\nSLinkTrack Team"
         )
         utils.send_email(
-            subject="[Shortlink] Đặt lại mật khẩu",
+            subject="[SLinkTrack] Mã OTP đặt lại mật khẩu",
             body=email_body,
             to_email=user.email
         )
     except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Không thể gửi email: {err}")
+        email_sent = False
+        error_msg = str(err)
+        print(f"SMTP Error occurred (OTP generated: {otp}): {err}")
 
-    response = {"status": "success", "message": "Đã gửi email đặt lại mật khẩu. Vui lòng kiểm tra hộp thư."}
-    if utils.SEND_RESET_LINK_IN_RESPONSE:
-        response["reset_link"] = reset_link
+    if email_sent:
+        response = {"status": "success", "message": "Đã gửi mã OTP đặt lại mật khẩu. Vui lòng kiểm tra hộp thư."}
+    else:
+        response = {
+            "status": "success", 
+            "message": f"Đã tạo OTP thành công nhưng không thể gửi email do lỗi SMTP. Dùng mã OTP: {otp} để đặt lại mật khẩu."
+        }
+    
+    # Luôn luôn trả về OTP trong payload phản hồi để hỗ trợ môi trường chạy thử (dev/test)
+    response["otp"] = otp
     return response
 
 
 @app.post("/api/auth/reset")
 def reset_password(payload: schemas.ResetPassword, db: Session = Depends(get_db)):
-    try:
-        data = utils.verify_password_reset_token(payload.token)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Token không hợp lệ hoặc đã hết hạn")
-
-    user = db.query(models.User).filter(models.User.id == data.get("user_id")).first()
+    user = db.query(models.User).filter(models.User.email == payload.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
 
+    if not user.reset_otp or user.reset_otp != payload.otp:
+        raise HTTPException(status_code=400, detail="Mã OTP không chính xác")
+
+    if user.reset_otp_expires_at and user.reset_otp_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Mã OTP đã hết hạn (chỉ có hiệu lực trong 5 phút)")
+
     user.password_hash = utils.hash_password(payload.new_password)
+    user.reset_otp = None
+    user.reset_otp_expires_at = None
     db.commit()
     return {"status": "success", "message": "Mật khẩu đã được cập nhật thành công."}
 
 # --- API TẠO ĐƯỜNG DẪN RÚT GỌN MỚI ---
 @app.post("/api/shorten")
-def shorten_url(payload: schemas.ShortenRequest, db: Session = Depends(get_db)):
+def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.User] = Depends(get_current_user_optional), db: Session = Depends(get_db)):
     if payload.alias:
         existing = db.query(models.Link).filter(models.Link.short_code == payload.alias).first()
         if existing:
@@ -195,7 +261,9 @@ def shorten_url(payload: schemas.ShortenRequest, db: Session = Depends(get_db)):
         short_code=short_code,
         domain_id=domain_id,
         workspace_id=payload.workspace_id if getattr(payload, 'workspace_id', None) else None,
+        user_id=current_user.id if current_user else None,
         params=params_value,
+        expired_at=payload.expired_at,
         status="active"
     )
     db.add(new_link)
@@ -205,6 +273,7 @@ def shorten_url(payload: schemas.ShortenRequest, db: Session = Depends(get_db)):
     short_url = f"https://{final_domain_name}/{short_code}" if final_domain_name else f"http://localhost:8000/{short_code}"
     return {
         "status": "success",
+        "message": "Tạo liên kết rút gọn thành công!",
         "short_code": short_code,
         "name": new_link.name,
         "short_url": short_url
@@ -249,14 +318,32 @@ def redirect_and_track(short_code: str, request: Request, db: Session = Depends(
     referer = request.headers.get("referer", "")
     traffic_source = "Direct (Trực tiếp / Gõ URL)"
     if referer:
-        if "facebook.com" in referer or "fb.me" in referer:
+        referer_lower = referer.lower()
+        if "facebook.com" in referer_lower or "fb.me" in referer_lower:
             traffic_source = "Facebook"
-        elif "youtube.com" in referer:
+        elif "instagram.com" in referer_lower:
+            traffic_source = "Instagram"
+        elif "zalo" in referer_lower or "zalo.me" in referer_lower:
+            traffic_source = "Zalo"
+        elif "tiktok.com" in referer_lower:
+            traffic_source = "TikTok"
+        elif "youtube.com" in referer_lower or "youtu.be" in referer_lower:
             traffic_source = "YouTube"
-        elif "linkedin.com" in referer:
+        elif "twitter.com" in referer_lower or "t.co" in referer_lower or "x.com" in referer_lower:
+            traffic_source = "Twitter / X"
+        elif "linkedin.com" in referer_lower:
             traffic_source = "LinkedIn"
-        elif "google.com" in referer:
+        elif "google" in referer_lower:
             traffic_source = "Google Search"
+        else:
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(referer).netloc
+                if domain.startswith("www."):
+                    domain = domain[4:]
+                traffic_source = domain if domain else "Website khác"
+            except Exception:
+                traffic_source = "Website khác"
 
     new_log = models.ClickLog(
         link_id=link.id,
@@ -283,18 +370,129 @@ def redirect_and_track(short_code: str, request: Request, db: Session = Depends(
 
 # --- API LẤY THỐNG KÊ ANALYTICS CHI TIẾT CỦA MỘT LINK ---
 @app.get("/api/analytics/{short_code}")
-def get_link_analytics(short_code: str, db: Session = Depends(get_db)):
-    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
-    if not link:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn để xem thống kê!")
+def get_link_analytics(
+    short_code: str,
+    period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    workspace_id: Optional[int] = None,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Xác định mốc thời gian lọc
+    now = datetime.utcnow()
+    filter_start = None
+    filter_end = None
+    
+    if period == "today":
+        filter_start = datetime(now.year, now.month, now.day)
+    elif period == "7days":
+        filter_start = now - timedelta(days=7)
+    elif period == "30days":
+        filter_start = now - timedelta(days=30)
+    elif period == "custom":
+        if start_date:
+            try:
+                filter_start = datetime.strptime(start_date, "%Y-%m-%d")
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                filter_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
+            except ValueError:
+                pass
 
-    total_clicks = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
+    # Phân giải danh sách link_ids
+    if short_code == "all":
+        if workspace_id:
+            # Kiểm tra quyền xem workspace
+            is_member = db.query(models.WorkspaceMember).filter(
+                models.WorkspaceMember.workspace_id == workspace_id,
+                models.WorkspaceMember.user_id == current_user.id
+            ).first()
+            if not is_member:
+                raise HTTPException(status_code=403, detail="Từ chối truy cập không gian!")
+            links = db.query(models.Link).filter(models.Link.workspace_id == workspace_id).all()
+        else:
+            links = db.query(models.Link).filter(
+                models.Link.user_id == current_user.id,
+                models.Link.workspace_id == None
+            ).all()
+        link_ids = [l.id for l in links]
+    else:
+        link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+        if not link:
+            raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn để xem thống kê!")
+        
+        # Kiểm tra quyền xem link này
+        if link.workspace_id:
+            is_member = db.query(models.WorkspaceMember).filter(
+                models.WorkspaceMember.workspace_id == link.workspace_id,
+                models.WorkspaceMember.user_id == current_user.id
+            ).first()
+            if not is_member:
+                raise HTTPException(status_code=403, detail="Từ chối truy cập thống kê link này!")
+        else:
+            if link.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Từ chối truy cập thống kê link này!")
+        link_ids = [link.id]
 
-    device_stats = db.query(models.ClickLog.device_type, func.count(models.ClickLog.id).label("count")).filter(models.ClickLog.link_id == link.id).group_by(models.ClickLog.device_type).all()
-    os_stats = db.query(models.ClickLog.os, func.count(models.ClickLog.id).label("count")).filter(models.ClickLog.link_id == link.id).group_by(models.ClickLog.os).all()
-    browser_stats = db.query(models.ClickLog.browser, func.count(models.ClickLog.id).label("count")).filter(models.ClickLog.link_id == link.id).group_by(models.ClickLog.browser).all()
-    source_stats = db.query(models.ClickLog.traffic_source, func.count(models.ClickLog.id).label("count")).filter(models.ClickLog.link_id == link.id).group_by(models.ClickLog.traffic_source).all()
-    click_logs = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).order_by(models.ClickLog.created_at.desc() if hasattr(models.ClickLog, 'created_at') else models.ClickLog.id.desc()).all()
+    if not link_ids:
+        return {
+            "status": "success",
+            "link_info": {
+                "short_code": short_code,
+                "name": "Tất cả link" if short_code == "all" else "",
+                "original_url": ""
+            },
+            "summary": {
+                "total_clicks": 0
+            },
+            "charts": {
+                "devices": {},
+                "operating_systems": {},
+                "browsers": {},
+                "traffic_sources": {},
+                "clicks_over_time": {}
+            },
+            "click_rows": []
+        }
+
+    # Truy vấn dữ liệu click logs
+    query = db.query(models.ClickLog).filter(models.ClickLog.link_id.in_(link_ids))
+    if filter_start:
+        query = query.filter(models.ClickLog.created_at >= filter_start)
+    if filter_end:
+        query = query.filter(models.ClickLog.created_at <= filter_end)
+        
+    click_logs = query.order_by(models.ClickLog.created_at.desc()).all()
+    total_clicks = len(click_logs)
+
+    # Thống kê phân loại và theo thời gian (clicks_over_time)
+    device_stats = {}
+    os_stats = {}
+    browser_stats = {}
+    source_stats = {}
+    clicks_over_time = {}
+
+    for click in click_logs:
+        device = click.device_type or "Unknown"
+        device_stats[device] = device_stats.get(device, 0) + 1
+        
+        os = click.os or "Unknown"
+        os_stats[os] = os_stats.get(os, 0) + 1
+        
+        browser = click.browser or "Unknown"
+        browser_stats[browser] = browser_stats.get(browser, 0) + 1
+        
+        source = click.traffic_source or "Direct (Trực tiếp)"
+        source_stats[source] = source_stats.get(source, 0) + 1
+        
+        if click.created_at:
+            date_str = click.created_at.strftime("%Y-%m-%d")
+            clicks_over_time[date_str] = clicks_over_time.get(date_str, 0) + 1
+
+    sorted_clicks_over_time = dict(sorted(clicks_over_time.items()))
 
     click_rows = [
         {
@@ -308,29 +506,44 @@ def get_link_analytics(short_code: str, db: Session = Depends(get_db)):
             "traffic_source": click.traffic_source,
             "referer": click.referer,
         }
-        for click in click_logs
+        for click in click_logs[:100]
     ]
+
+    link_name = "Tất cả link" if short_code == "all" else (link.name if 'link' in locals() and link else "")
+    original_url = "" if short_code == "all" else (link.original_url if 'link' in locals() and link else "")
+
+    # Lấy lịch sử chỉnh sửa nếu có
+    edit_history_list = []
+    if short_code != "all" and 'link' in locals() and link:
+        histories = db.query(models.LinkEditHistory).filter(models.LinkEditHistory.link_id == link.id).order_by(models.LinkEditHistory.edited_at.desc()).all()
+        for h in histories:
+            editor = db.query(models.User).filter(models.User.id == h.edited_by).first()
+            edit_history_list.append({
+                "old_expired_at": h.old_expired_at.strftime('%d/%m/%Y %H:%M') if h.old_expired_at else "Vô thời hạn",
+                "new_expired_at": h.new_expired_at.strftime('%d/%m/%Y %H:%M') if h.new_expired_at else "Vô thời hạn",
+                "edited_at": h.edited_at.strftime('%d/%m/%Y %H:%M') if h.edited_at else None,
+                "edited_by": editor.email if editor else "Hệ thống"
+            })
 
     return {
         "status": "success",
         "link_info": {
-            "short_code": link.short_code,
-            "name": link.name,
-            "original_url": link.original_url,
-            "status": link.status,
-            "expired_at": link.expired_at.isoformat() if getattr(link, 'expired_at', None) else None,
-            "created_at": link.created_at if hasattr(link, 'created_at') else None
+            "short_code": short_code,
+            "name": link_name,
+            "original_url": original_url
         },
         "summary": {
             "total_clicks": total_clicks
         },
         "charts": {
-            "devices": {item.device_type: item.count for item in device_stats},
-            "operating_systems": {item.os: item.count for item in os_stats},
-            "browsers": {item.browser: item.count for item in browser_stats},
-            "traffic_sources": {item.traffic_source: item.count for item in source_stats}
+            "devices": device_stats,
+            "operating_systems": os_stats,
+            "browsers": browser_stats,
+            "traffic_sources": source_stats,
+            "clicks_over_time": sorted_clicks_over_time
         },
-        "click_rows": click_rows
+        "click_rows": click_rows,
+        "edit_history": edit_history_list
     }
 
 @app.get("/api/analytics/{short_code}/export")
@@ -363,36 +576,6 @@ def export_link_clicks(short_code: str, db: Session = Depends(get_db)):
     }
     return Response(content=csv_bytes, media_type="text/csv", headers=headers)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Phiên đăng nhập không hợp lệ hoặc đã hết hạn!",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        print(f"Token: {token}")
-        payload = jwt.decode(token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
-        print(f"Payload: {payload}")
-        user_id: int = payload.get("user_id")
-        print(f"User ID: {user_id}")
-        if user_id is None:
-            raise credentials_exception
-        
-        user = db.query(models.User).filter(models.User.id == user_id).first()
-        print(f"User: {user}")
-        if user is None:
-            raise credentials_exception
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token đã hết hạn, vui lòng đăng nhập lại")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Token không hợp lệ")
-    except Exception as e:
-        print(e)
-        raise credentials_exception
-    
 @app.get("/api/workspaces")
 def get_workspaces(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user.id).all()
@@ -427,20 +610,20 @@ def create_workspace(payload: schemas.WorkspaceCreate, current_user: models.User
 def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     checker = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == current_user.id).first()
     if not checker or checker.role_in_workspace != "owner":
-        raise HTTPException(status_code=403, detail="Bạn không có quyền mời thành viên!")
+        raise HTTPException(status_code=403, detail="Mời thành viên thất bại: Bạn không có quyền quản trị nhóm!")
         
     invited_user = db.query(models.User).filter(models.User.email == payload.email).first()
     if not invited_user:
-        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng!")
+        raise HTTPException(status_code=404, detail="Mời thành viên thất bại: Không tìm thấy tài khoản người dùng với email này!")
         
     already_member = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id, models.WorkspaceMember.user_id == invited_user.id).first()
     if already_member:
-        raise HTTPException(status_code=400, detail="Người dùng này đã là thành viên!")
+        raise HTTPException(status_code=400, detail="Mời thành viên thất bại: Người dùng này đã tham gia nhóm!")
         
     new_member = models.WorkspaceMember(workspace_id=workspace_id, user_id=invited_user.id, role_in_workspace=payload.role_in_workspace)
     db.add(new_member)
     db.commit()
-    return {"status": "success", "message": "Mời thành công!"}
+    return {"status": "success", "message": "Mời thành viên tham gia nhóm thành công!"}
 
 @app.get("/api/workspaces/{workspace_id}/links")
 def get_workspace_links(workspace_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -450,17 +633,118 @@ def get_workspace_links(workspace_id: int, current_user: models.User = Depends(g
     links = db.query(models.Link).filter(models.Link.workspace_id == workspace_id).all()
     return {"status": "success", "links": links}
 
+@app.get("/api/workspaces/{workspace_id}/members")
+def get_workspace_members(workspace_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    is_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == current_user.id
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Từ chối truy cập thông tin nhóm!")
+        
+    members = db.query(models.WorkspaceMember, models.User).join(
+        models.User, models.WorkspaceMember.user_id == models.User.id
+    ).filter(models.WorkspaceMember.workspace_id == workspace_id).all()
+    
+    result = []
+    for member, user in members:
+        result.append({
+            "user_id": user.id,
+            "email": user.email,
+            "role_in_workspace": member.role_in_workspace
+        })
+    return {"status": "success", "members": result}
+
+@app.put("/api/workspaces/{workspace_id}/members/{user_id}")
+def update_workspace_member_role(
+    workspace_id: int,
+    user_id: int,
+    payload: schemas.WorkspaceMemberUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Kiểm tra xem current_user có phải là owner của không gian này không
+    checker = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == current_user.id
+    ).first()
+    if not checker or checker.role_in_workspace != "owner":
+        raise HTTPException(status_code=403, detail="Chỉ quản trị viên (owner) mới có quyền sửa vai trò!")
+
+    # Tìm thành viên cần sửa
+    target_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == user_id
+    ).first()
+    if not target_member:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên này trong nhóm!")
+
+    if target_member.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Bạn không thể tự sửa vai trò quản trị viên của chính mình!")
+
+    target_member.role_in_workspace = payload.role_in_workspace
+    db.commit()
+    return {"status": "success", "message": "Cập nhật vai trò thành công!"}
+
+@app.delete("/api/workspaces/{workspace_id}/members/{user_id}")
+def delete_workspace_member(
+    workspace_id: int,
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Kiểm tra xem current_user có phải là owner của không gian này không
+    checker = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == current_user.id
+    ).first()
+    if not checker or checker.role_in_workspace != "owner":
+        raise HTTPException(status_code=403, detail="Xóa người dùng thất bại: Bạn không có quyền quản trị!")
+
+    # Tìm thành viên cần xóa
+    target_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == user_id
+    ).first()
+    if not target_member:
+        raise HTTPException(status_code=404, detail="Xóa người dùng thất bại: Không tìm thấy thành viên trong nhóm!")
+
+    if target_member.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Xóa người dùng thất bại: Bạn không thể tự xóa bản thân khỏi nhóm!")
+
+    db.delete(target_member)
+    db.commit()
+    return {"status": "success", "message": "Xóa người dùng khỏi nhóm thành công!"}
+
 @app.get("/api/all-links")
-def get_all_links(db: Session = Depends(get_db)):
-    links = db.query(models.Link).order_by(models.Link.id.desc()).all()
+def get_all_links(workspace_id: Optional[int] = None, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if workspace_id:
+        is_member = db.query(models.WorkspaceMember).filter(
+            models.WorkspaceMember.workspace_id == workspace_id,
+            models.WorkspaceMember.user_id == current_user.id
+        ).first()
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Từ chối truy cập không gian!")
+        links = db.query(models.Link).filter(models.Link.workspace_id == workspace_id).order_by(models.Link.id.desc()).all()
+    else:
+        links = db.query(models.Link).filter(
+            models.Link.user_id == current_user.id,
+            models.Link.workspace_id == None
+        ).order_by(models.Link.id.desc()).all()
+
     result = []
     for link in links:
+        # Tính toán trạng thái hết hạn thực tế
+        computed_status = link.status
+        if link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow():
+            computed_status = "expired"
+
         click_count = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
         result.append({
           "short_code": link.short_code,
           "name": link.name,
           "original_url": link.original_url,
-          "status": link.status,
+          "status": computed_status,
           "expired_at": link.expired_at.isoformat() if getattr(link, 'expired_at', None) else None,
           "clicks": click_count,
           "date": link.created_at.strftime('%d/%m/%Y') if hasattr(link, 'created_at') and link.created_at else "12/06/2026"
@@ -468,22 +752,54 @@ def get_all_links(db: Session = Depends(get_db)):
     return result
 
 @app.patch("/api/links/{short_code}")
-def update_link(short_code: str, payload: schemas.LinkUpdate, db: Session = Depends(get_db)):
+def update_link(short_code: str, payload: schemas.LinkUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
     if not link:
         raise HTTPException(status_code=404, detail="Không tìm thấy link để cập nhật!")
-    if payload.name is not None:
-        link.name = payload.name.strip() or link.name
-    if payload.status is not None:
-        if payload.status not in ("active", "paused"):
-            raise HTTPException(status_code=400, detail="Trạng thái không hợp lệ.")
-        link.status = payload.status
-    if payload.expired_at is not None:
-        link.expired_at = payload.expired_at
+
+    # Tính toán trạng thái thực tế hiện tại
+    is_expired = link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow()
+    if is_expired or link.status == "expired":
+        raise HTTPException(status_code=400, detail="Không được sửa liên kết đã kết thúc!")
+
+    # Nếu link đang chạy, chỉ cho phép chỉnh sửa thời gian kết thúc link
+    if link.status == "active":
+        if payload.name is not None and payload.name.strip() != (link.name or ""):
+            raise HTTPException(status_code=400, detail="Đối với liên kết đang hoạt động, chỉ được phép sửa thời gian kết thúc link!")
+        if payload.status is not None and payload.status != link.status:
+            raise HTTPException(status_code=400, detail="Đối với liên kết đang hoạt động, chỉ được phép sửa thời gian kết thúc link!")
+
+        if payload.expired_at is not None:
+            # Thời gian kết thúc phải lớn hơn ngày sửa (ngày hiện tại)
+            if payload.expired_at < datetime.utcnow():
+                raise HTTPException(status_code=400, detail="Thời gian kết thúc không được nhỏ hơn ngày hiện tại!")
+
+            # Lưu lại lịch sử chỉnh sửa
+            history = models.LinkEditHistory(
+                link_id=link.id,
+                old_expired_at=link.expired_at,
+                new_expired_at=payload.expired_at,
+                edited_by=current_user.id
+            )
+            db.add(history)
+            link.expired_at = payload.expired_at
+
+    # Đối với link đang dừng (paused), cho phép kích hoạt lại hoặc sửa expired_at
+    elif link.status == "paused":
+        if payload.name is not None:
+            link.name = payload.name.strip() or link.name
+        if payload.status is not None:
+            if payload.status not in ("active", "paused"):
+                raise HTTPException(status_code=400, detail="Trạng thái không hợp lệ.")
+            link.status = payload.status
+        if payload.expired_at is not None:
+            link.expired_at = payload.expired_at
+
     db.commit()
     db.refresh(link)
     return {
         "status": "success",
+        "message": "Cập nhật liên kết thành công!",
         "link_info": {
             "short_code": link.short_code,
             "name": link.name,
@@ -491,6 +807,60 @@ def update_link(short_code: str, payload: schemas.LinkUpdate, db: Session = Depe
             "expired_at": link.expired_at.isoformat() if getattr(link, 'expired_at', None) else None,
         }
     }
+
+@app.put("/api/links/{short_code}/toggle")
+def toggle_link_status(short_code: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy liên kết!")
+
+    is_expired = link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow()
+    if is_expired or link.status == "expired":
+        raise HTTPException(status_code=400, detail="Không thể thay đổi trạng thái của liên kết đã kết thúc chiến dịch!")
+
+    if link.status == "active":
+        link.status = "paused"
+        message = "Đã tạm dừng liên kết!"
+    else:
+        # Nếu đang kích hoạt lại, đảm bảo ngày hết hạn (nếu có) phải ở tương lai
+        if link.expired_at and link.expired_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Vui lòng cập nhật lại ngày hết hạn trước khi kích hoạt!")
+        link.status = "active"
+        message = "Đã kích hoạt liên kết hoạt động!"
+
+    db.commit()
+    return {"status": "success", "message": message, "new_status": link.status}
+
+@app.delete("/api/links/{short_code}")
+def delete_link(short_code: str, force: bool = False, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy liên kết cần xóa!")
+
+    # Quyền xóa tương tự
+    if link.workspace_id:
+        is_member = db.query(models.WorkspaceMember).filter(
+            models.WorkspaceMember.workspace_id == link.workspace_id,
+            models.WorkspaceMember.user_id == current_user.id
+        ).first()
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Từ chối truy cập xóa liên kết này!")
+    else:
+        if link.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Từ chối truy cập xóa liên kết này!")
+
+    # Tính toán xem link có đang chạy không
+    is_expired = link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow()
+    
+    # Nếu link đang chạy (status == active và chưa hết hạn)
+    if link.status == "active" and not is_expired:
+        if not force:
+            raise HTTPException(status_code=400, detail="Link này đang chạy. Hãy kết thúc chiến dịch trước khi xóa!")
+
+    # Xóa
+    db.delete(link)
+    db.commit()
+    return {"status": "success", "message": "Xóa liên kết rút gọn thành công!"}
 
 # --- API QUÉT CẢNH BÁO TRAFFIC BẤT THƯỜNG (ANOMALY DETECTION - Fix ATTRIBUTE) ---
 @app.get("/api/system/alerts")

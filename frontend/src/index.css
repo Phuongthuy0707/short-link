@@ -42,3 +42,70 @@ body {
 .stat-card.c2::before { background: var(--teal); }
 .stat-card.c3::before { background: var(--amber); }
 .stat-card.c4::before { background: var(--green); }
+
+/* --- LIGHT THEME STYLE OVERRIDES --- */
+.light-theme {
+  background-color: #f5f6fa !important;
+  color: #2f3542 !important;
+}
+
+.light-theme aside,
+.light-theme .bg-\[\#111118\],
+.light-theme .bg-\[\#18181f\],
+.light-theme .bg-\[\#14141c\],
+.light-theme .bg-white\/10 {
+  background-color: #ffffff !important;
+  border-color: rgba(0,0,0,0.08) !important;
+}
+
+.light-theme div,
+.light-theme aside,
+.light-theme header,
+.light-theme section,
+.light-theme main,
+.light-theme table,
+.light-theme select,
+.light-theme input,
+.light-theme button:not(.bg-\[\#6c5ce7\]):not(.bg-\[\#4ade80\]):not(.bg-\[\#ff7675\]):not(.bg-\[\#00cec9\]) {
+  border-color: rgba(0,0,0,0.08) !important;
+}
+
+.light-theme select,
+.light-theme input {
+  background-color: #f1f2f6 !important;
+  color: #2f3542 !important;
+}
+
+.light-theme select option {
+  background-color: #ffffff !important;
+  color: #2f3542 !important;
+}
+
+.light-theme .text-\[\#e8e8f0\],
+.light-theme .text-white,
+.light-theme h3,
+.light-theme th,
+.light-theme td {
+  color: #2f3542 !important;
+}
+
+.light-theme .text-\[\#7a7a9a\],
+.light-theme .text-\[\#7a7a9a\]\/70 {
+  color: #57606f !important;
+}
+
+.light-theme .bg-\[\#0a0a0f\] {
+  background-color: #f5f6fa !important;
+}
+
+.light-theme .border-\[rgba\(255\,255\,255\,0\.07\)\] {
+  border-color: rgba(0,0,0,0.08) !important;
+}
+
+.light-theme .bg-white {
+  background-color: #ffffff !important;
+}
+
+.light-theme .text-\[\#a29bfe\] {
+  color: #574bfc !important;
+}
