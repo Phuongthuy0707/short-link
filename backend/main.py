@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, text
@@ -13,7 +13,7 @@ import csv
 import io
 
 import models, schemas, utils
-from database import engine, get_db
+from database import engine, get_db, SessionLocal
 
 # Tự động khởi tạo cấu trúc bảng trong cơ sở dữ liệu SQLite nếu chưa có
 models.Base.metadata.create_all(bind=engine)
@@ -26,6 +26,26 @@ for alter_sql in [
             conn.execute(text(alter_sql))
     except OperationalError:
         pass
+
+# Tự động khởi tạo tài khoản Admin cố định
+db_init = SessionLocal()
+try:
+    admin_email = "adminslt@gmail.com"
+    admin_user = db_init.query(models.User).filter(models.User.email == admin_email).first()
+    if not admin_user:
+        hashed_pwd = utils.hash_password("123456")
+        new_admin = models.User(
+            email=admin_email,
+            password_hash=hashed_pwd,
+            role="admin"
+        )
+        if hasattr(models.User, 'username'):
+            setattr(new_admin, 'username', 'admin_slt')
+        db_init.add(new_admin)
+        db_init.commit()
+        print("Tài khoản Admin cố định đã được tạo thành công!")
+finally:
+    db_init.close()
 
 app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao")
 
@@ -91,6 +111,10 @@ def read_root():
 # --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
+    email_clean = payload.email.strip().lower()
+    if email_clean.startswith("admin"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Không được phép đăng ký tài khoản admin!")
+
     # Kiểm tra an toàn: Nếu bảng User có trường username thì lọc theo username, ngược lại lọc theo email
     if hasattr(models.User, 'username'):
         existing_username = db.query(models.User).filter(models.User.username == payload.username).first()
@@ -103,8 +127,7 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
     
     hashed_pwd = utils.hash_password(payload.password)
     
-    # Khởi tạo đối tượng User linh hoạt theo cấu trúc DB
-    new_user = models.User(email=payload.email, password_hash=hashed_pwd)
+    new_user = models.User(email=payload.email, password_hash=hashed_pwd, role="member")
     if hasattr(models.User, 'username'):
         setattr(new_user, 'username', payload.username)
 
@@ -141,9 +164,47 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
         "status": "success",
         "message": "Đăng nhập thành công!",
         "access_token": access_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "role": user.role if hasattr(user, 'role') else "member"
     }
 
+# @app.post("/api/auth/oauth")
+# def oauth_login(payload: schemas.OAuthLoginPayload, db: Session = Depends(get_db)):
+#     email = payload.email.strip().lower()
+#     if not email:
+#         raise HTTPException(status_code=400, detail="Email không hợp lệ!")
+# 
+#     user = db.query(models.User).filter(models.User.email == email).first()
+#     
+#     if not user:
+#         hashed_pwd = utils.hash_password(utils.generate_short_code())
+#         user = models.User(email=email, password_hash=hashed_pwd)
+#         if hasattr(models.User, 'username'):
+#             username_part = email.split("@")[0]
+#             existing_user = db.query(models.User).filter(models.User.username == username_part).first()
+#             if existing_user:
+#                 username_part = f"{username_part}_{utils.generate_short_code()[:4]}"
+#             setattr(user, 'username', username_part)
+#         
+#         db.add(user)
+#         db.commit()
+#         db.refresh(user)
+#         message = "Đăng ký và đăng nhập thành công bằng tài khoản mạng xã hội!"
+#     else:
+#         message = "Đăng nhập thành công bằng tài khoản mạng xã hội!"
+# 
+#     user_email = user.email if hasattr(user, 'email') else email
+#     
+#     access_token = utils.create_access_token(
+#         data={"user_id": user.id, "email": user_email, "role": "member"}
+#     )
+#     
+#     return {
+#         "status": "success",
+#         "message": message,
+#         "access_token": access_token,
+#         "token_type": "bearer"
+#     }
 
 @app.post("/api/auth/forgot")
 def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_db)):
@@ -255,6 +316,10 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
     if params_value == "":
         params_value = None
 
+    link_pwd_hash = None
+    if getattr(payload, 'password', None) and payload.password.strip():
+        link_pwd_hash = utils.hash_password(payload.password.strip())
+
     new_link = models.Link(
         original_url=payload.url,
         name=payload.name.strip() if getattr(payload, 'name', None) else None,
@@ -264,6 +329,7 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
         user_id=current_user.id if current_user else None,
         params=params_value,
         expired_at=payload.expired_at,
+        password_hash=link_pwd_hash,
         status="active"
     )
     db.add(new_link)
@@ -290,17 +356,142 @@ def get_qr_code(short_code: str, db: Session = Depends(get_db)):
     return StreamingResponse(qr_stream, media_type="image/png")
 
 # --- API ĐIỀU HƯỚNG LINK & QUÉT ANALYTICS NGẦM ---
-@app.get("/{short_code}")
-def redirect_and_track(short_code: str, request: Request, db: Session = Depends(get_db)):
-    link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
-    if not link:
-        raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
+def get_password_prompt_html(short_code: str, error: Optional[str] = None) -> str:
+    error_html = f'<div class="error-message">{error}</div>' if error else ''
+    return f"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLinkTrack - Nhập mật khẩu truy cập</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            background-color: #0b0b0f;
+            color: #e8e8f0;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        .container {{
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+        }}
+        .card {{
+            background-color: #111118;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }}
+        .logo {{
+            font-size: 24px;
+            font-weight: 800;
+            margin-bottom: 24px;
+            color: #e8e8f0;
+        }}
+        .logo span {{
+            color: #a29bfe;
+        }}
+        .lock-icon {{
+            font-size: 48px;
+            margin-bottom: 16px;
+            display: inline-block;
+        }}
+        h2 {{
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0 0 8px 0;
+        }}
+        p {{
+            font-size: 13px;
+            color: #7a7a9a;
+            margin: 0 0 24px 0;
+        }}
+        .input-group {{
+            text-align: left;
+            margin-bottom: 20px;
+        }}
+        label {{
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #7a7a9a;
+            letter-spacing: 0.5px;
+            display: block;
+            margin-bottom: 6px;
+        }}
+        input {{
+            width: 100%;
+            box-sizing: border-box;
+            background-color: #18181f;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 12px;
+            color: white;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.3s;
+        }}
+        input:focus {{
+            border-color: #6c5ce7;
+            box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.15);
+        }}
+        button {{
+            width: 100%;
+            background-color: #6c5ce7;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }}
+        button:hover {{
+            background-color: #5b4bc4;
+        }}
+        .error-message {{
+            background-color: rgba(255, 118, 117, 0.15);
+            border: 1px solid rgba(255, 118, 117, 0.3);
+            color: #ff7675;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: left;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">SLink<span>Track</span></div>
+            <div class="lock-icon">🔒</div>
+            <h2>Mật khẩu yêu cầu</h2>
+            <p>Liên kết này được bảo vệ bằng mật khẩu. Vui lòng nhập mật khẩu chính xác để tiếp tục.</p>
+            
+            <form method="POST" action="/{short_code}">
+                {error_html}
+                <div class="input-group">
+                    <label>Mật khẩu truy cập</label>
+                    <input type="password" name="password" required placeholder="Nhập mật khẩu tại đây..." autofocus />
+                </div>
+                <button type="submit">Xác nhận & Truy cập</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>"""
 
-    if link.status != "active":
-        raise HTTPException(status_code=404, detail="Đường dẫn hiện không hoạt động.")
-    if getattr(link, 'expired_at', None) and link.expired_at < datetime.utcnow():
-        raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
-
+def perform_tracking_and_redirect(link: models.Link, request: Request, db: Session):
     ip_address = request.client.host if request.client else "127.0.0.1"
     user_agent_string = request.headers.get("user-agent", "")
     user_agent = parse(user_agent_string)
@@ -367,6 +558,38 @@ def redirect_and_track(short_code: str, request: Request, db: Session = Depends(
             target_url = f"{target_url}{connector}{params}"
 
     return RedirectResponse(url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+# --- API ĐIỀU HƯỚNG LINK & QUÉT ANALYTICS NGẦM ---
+@app.get("/{short_code}")
+def redirect_and_track(short_code: str, request: Request, db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
+
+    if getattr(link, 'expired_at', None) and link.expired_at < datetime.utcnow():
+        raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
+
+    if link.password_hash:
+        return HTMLResponse(content=get_password_prompt_html(short_code), status_code=200)
+
+    return perform_tracking_and_redirect(link, request, db)
+
+@app.post("/{short_code}")
+def verify_password_and_redirect(short_code: str, request: Request, password: str = Form(...), db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
+
+    if getattr(link, 'expired_at', None) and link.expired_at < datetime.utcnow():
+        raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
+
+    if not link.password_hash:
+        return perform_tracking_and_redirect(link, request, db)
+
+    if not utils.verify_password(password.strip(), link.password_hash):
+        return HTMLResponse(content=get_password_prompt_html(short_code, error="Mật khẩu không chính xác! Vui lòng thử lại."), status_code=200)
+
+    return perform_tracking_and_redirect(link, request, db)
 
 # --- API LẤY THỐNG KÊ ANALYTICS CHI TIẾT CỦA MỘT LINK ---
 @app.get("/api/analytics/{short_code}")
@@ -936,3 +1159,234 @@ def get_dashboard_analytics(
         "total_clicks": total_clicks,
         "trend": [{"date": item.day, "clicks": item.count} for item in trend_stats]
     }
+
+# --- SYSTEM ADMIN API ENDPOINTS ---
+
+def check_admin(current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Quyền truy cập bị từ chối! Chỉ dành cho Admin hệ thống.")
+    return current_user
+
+@app.get("/api/admin/users")
+def admin_get_users(current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    users = db.query(models.User).order_by(models.User.id.desc()).all()
+    result = []
+    for user in users:
+        link_count = db.query(models.Link).filter(models.Link.user_id == user.id).count()
+        workspace_count = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == user.id).count()
+        result.append({
+            "id": user.id,
+            "email": user.email,
+            "username": getattr(user, 'username', 'N/A'),
+            "role": user.role,
+            "created_at": user.created_at.strftime('%d/%m/%Y %H:%M') if user.created_at else None,
+            "link_count": link_count,
+            "workspace_count": workspace_count
+        })
+    return {"status": "success", "users": result}
+
+@app.get("/api/admin/links")
+def admin_get_links(current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    links = db.query(models.Link).order_by(models.Link.id.desc()).all()
+    result = []
+    for link in links:
+        computed_status = link.status
+        if link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow():
+            computed_status = "expired"
+
+        owner = db.query(models.User).filter(models.User.id == link.user_id).first()
+        owner_email = owner.email if owner else "System / Anonymous"
+
+        click_count = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
+        result.append({
+            "id": link.id,
+            "short_code": link.short_code,
+            "name": link.name,
+            "original_url": link.original_url,
+            "status": computed_status,
+            "clicks": click_count,
+            "owner_email": owner_email,
+            "created_at": link.created_at.strftime('%d/%m/%Y %H:%M') if link.created_at else None
+        })
+    return {"status": "success", "links": result}
+
+@app.get("/api/admin/workspaces")
+def admin_get_workspaces(current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    workspaces = db.query(models.Workspace).order_by(models.Workspace.id.desc()).all()
+    result = []
+    for ws in workspaces:
+        owner = db.query(models.User).filter(models.User.id == ws.created_by).first()
+        owner_email = owner.email if owner else "System / Anonymous"
+        
+        member_count = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == ws.id).count()
+        link_count = db.query(models.Link).filter(models.Link.workspace_id == ws.id).count()
+        result.append({
+            "id": ws.id,
+            "name": ws.name,
+            "owner_email": owner_email,
+            "member_count": member_count,
+            "link_count": link_count,
+            "created_at": ws.created_at.strftime('%d/%m/%Y %H:%M') if ws.created_at else None
+        })
+    return {"status": "success", "workspaces": result}
+
+# --- ADMIN CRUD - USERS ---
+
+@app.post("/api/admin/users")
+def admin_create_user(payload: schemas.AdminUserCreate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    existing = db.query(models.User).filter(models.User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email này đã được sử dụng!")
+    
+    hashed_pwd = utils.hash_password(payload.password)
+    new_user = models.User(email=payload.email, password_hash=hashed_pwd, role=payload.role)
+    if payload.username and hasattr(models.User, 'username'):
+        setattr(new_user, 'username', payload.username)
+        
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"status": "success", "message": "Tạo người dùng thành công!"}
+
+@app.put("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, payload: schemas.AdminUserUpdate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng!")
+    
+    if payload.username and hasattr(models.User, 'username'):
+        setattr(user, 'username', payload.username)
+    if payload.role:
+        user.role = payload.role
+    if payload.password:
+        user.password_hash = utils.hash_password(payload.password)
+        
+    db.commit()
+    return {"status": "success", "message": "Cập nhật người dùng thành công!"}
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Bạn không thể tự xóa tài khoản của chính mình!")
+        
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng!")
+        
+    db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == user_id).delete()
+    db.query(models.Link).filter(models.Link.user_id == user_id).delete()
+    db.delete(user)
+    db.commit()
+    return {"status": "success", "message": "Xóa người dùng thành công!"}
+
+# --- ADMIN CRUD - LINKS ---
+
+@app.post("/api/admin/links")
+def admin_create_link(payload: schemas.AdminLinkCreate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    owner_id = current_user.id
+    if payload.owner_email:
+        owner = db.query(models.User).filter(models.User.email == payload.owner_email).first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Không tìm thấy người dùng sở hữu link!")
+        owner_id = owner.id
+        
+    if payload.alias:
+        existing = db.query(models.Link).filter(models.Link.short_code == payload.alias).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Alias đã tồn tại!")
+        short_code = payload.alias
+    else:
+        while True:
+            short_code = utils.generate_short_code()
+            existing = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+            if not existing:
+                break
+                
+    new_link = models.Link(
+        original_url=payload.url,
+        short_code=short_code,
+        name=payload.name,
+        user_id=owner_id,
+        expired_at=payload.expired_at,
+        status="active"
+    )
+    db.add(new_link)
+    db.commit()
+    return {"status": "success", "message": "Tạo liên kết thành công!"}
+
+@app.put("/api/admin/links/{link_id}")
+def admin_update_link(link_id: int, payload: schemas.AdminLinkUpdate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy liên kết!")
+        
+    if payload.short_code:
+        if payload.short_code != link.short_code:
+            existing = db.query(models.Link).filter(models.Link.short_code == payload.short_code).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Alias này đã được sử dụng!")
+        link.short_code = payload.short_code
+        
+    if payload.name is not None:
+        link.name = payload.name
+    if payload.original_url:
+        link.original_url = payload.original_url
+    if payload.status:
+        link.status = payload.status
+    if payload.expired_at is not None:
+        link.expired_at = payload.expired_at
+        
+    db.commit()
+    return {"status": "success", "message": "Cập nhật liên kết thành công!"}
+
+@app.delete("/api/admin/links/{link_id}")
+def admin_delete_link(link_id: int, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy liên kết!")
+        
+    db.query(models.ClickLog).filter(models.ClickLog.link_id == link_id).delete()
+    db.query(models.LinkEditHistory).filter(models.LinkEditHistory.link_id == link_id).delete()
+    db.delete(link)
+    db.commit()
+    return {"status": "success", "message": "Xóa liên kết thành công!"}
+
+# --- ADMIN CRUD - WORKSPACES ---
+
+@app.post("/api/admin/workspaces")
+def admin_create_workspace(payload: schemas.AdminWorkspaceCreate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    owner = db.query(models.User).filter(models.User.email == payload.owner_email).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chủ sở hữu nhóm!")
+        
+    new_ws = models.Workspace(name=payload.name, created_by=owner.id)
+    db.add(new_ws)
+    db.commit()
+    db.refresh(new_ws)
+    
+    ws_member = models.WorkspaceMember(workspace_id=new_ws.id, user_id=owner.id, role_in_workspace="owner")
+    db.add(ws_member)
+    db.commit()
+    return {"status": "success", "message": "Tạo nhóm thành công!"}
+
+@app.put("/api/admin/workspaces/{workspace_id}")
+def admin_update_workspace(workspace_id: int, payload: schemas.AdminWorkspaceUpdate, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    ws = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhóm!")
+        
+    ws.name = payload.name
+    db.commit()
+    return {"status": "success", "message": "Cập nhật nhóm thành công!"}
+
+@app.delete("/api/admin/workspaces/{workspace_id}")
+def admin_delete_workspace(workspace_id: int, current_user: models.User = Depends(check_admin), db: Session = Depends(get_db)):
+    ws = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhóm!")
+        
+    db.query(models.WorkspaceMember).filter(models.WorkspaceMember.workspace_id == workspace_id).delete()
+    db.query(models.Link).filter(models.Link.workspace_id == workspace_id).delete()
+    db.delete(ws)
+    db.commit()
+    return {"status": "success", "message": "Xóa nhóm thành công!"}

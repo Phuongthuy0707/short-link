@@ -50,3 +50,40 @@ class WorkspaceInvite(BaseModel):
 
 class WorkspaceMemberUpdate(BaseModel):
     role_in_workspace: str = "viewer"  # owner, editor, viewer
+
+# class OAuthLoginPayload(BaseModel):
+#     provider: str
+#     email: EmailStr
+#     name: str
+
+class AdminUserCreate(BaseModel):
+    email: EmailStr
+    username: Optional[str] = None
+    password: str
+    role: str = "member"
+
+class AdminUserUpdate(BaseModel):
+    username: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+
+class AdminLinkCreate(BaseModel):
+    url: str
+    name: Optional[str] = None
+    alias: Optional[str] = None
+    expired_at: Optional[datetime] = None
+    owner_email: Optional[str] = None
+
+class AdminLinkUpdate(BaseModel):
+    short_code: Optional[str] = None
+    name: Optional[str] = None
+    original_url: Optional[str] = None
+    status: Optional[str] = None
+    expired_at: Optional[datetime] = None
+
+class AdminWorkspaceCreate(BaseModel):
+    name: str
+    owner_email: str
+
+class AdminWorkspaceUpdate(BaseModel):
+    name: str
