@@ -47,7 +47,7 @@ try:
 finally:
     db_init.close()
 
-app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao")
+app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao", root_path="/slink")
 
 # --- CẤU HÌNH CỦA CỔNG BẢO MẬT CORS CHUẨN ---
 app.add_middleware(

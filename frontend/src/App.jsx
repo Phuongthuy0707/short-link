@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = "http://localhost:8000";
+const API_URL = "https://short-link-tqp6.onrender.com";
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('login');
@@ -1834,8 +1834,8 @@ export default function App() {
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkName} onChange={(e) => setLinkName(e.target.value)} placeholder={t.linkNameLabel} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customAlias} onChange={(e) => setCustomAlias(e.target.value)} placeholder={t.customAliasPlaceholder} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customDomain} onChange={(e) => setCustomDomain(e.target.value)} placeholder={t.domainPlaceholder} />
-              <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkParams} onChange={(e) => setLinkParams(e.target.value)} placeholder={t.paramsPlaceholder} />
-              <input type="password" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder={lang === 'vi' ? 'Mật khẩu bảo vệ (Không bắt buộc)' : 'Protection password (Optional)'} />
+              <input type="text" autoComplete="off" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkParams} onChange={(e) => setLinkParams(e.target.value)} placeholder={t.paramsPlaceholder} />
+              <input type="password" autoComplete="new-password" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder={lang === 'vi' ? 'Mật khẩu bảo vệ (Không bắt buộc)' : 'Protection password (Optional)'} />
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Ngày hết hạn (Không bắt buộc)' : 'Expiration date (Optional)'}</label>
                 <input 
@@ -1878,7 +1878,7 @@ export default function App() {
           <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[340px] p-6 flex flex-col items-center gap-4">
             <div className="w-full flex justify-between items-center"><span className="text-xs font-bold">{t.qrTitle}</span><button onClick={() => setIsQrOpen(false)}>✕</button></div>
             <div className="bg-white p-3 rounded-xl"><img src={`${API_URL}/api/qrcode/${selectedShortCode}`} alt="QR" className="w-[150px] h-[150px]" /></div>
-            <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded">localhost:8000/{selectedShortCode}</div>
+            <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded">{API_URL.replace("https://", "").replace("http://", "")}/{selectedShortCode}</div>
           </div>
         </div>
       )}
@@ -2500,6 +2500,7 @@ export default function App() {
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Tên tài khoản (Username)' : 'Username'}</label>
                 <input 
                   type="text" 
+                  autoComplete="off"
                   className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
                   value={adminUserUsername} 
                   onChange={(e) => setAdminUserUsername(e.target.value)} 
@@ -2513,6 +2514,7 @@ export default function App() {
                 <input 
                   required={!adminEditingUser}
                   type="password" 
+                  autoComplete="new-password"
                   className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
                   value={adminUserPassword} 
                   onChange={(e) => setAdminUserPassword(e.target.value)} 
