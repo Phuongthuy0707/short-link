@@ -9,6 +9,8 @@ import os
 import ssl
 import smtplib
 from email.message import EmailMessage
+from typing import Optional
+from PIL import Image
 
 try:
     from dotenv import load_dotenv
@@ -85,15 +87,102 @@ def send_email(subject: str, body: str, to_email: str, from_email: str = None) -
             server.send_message(message)
 
 # 5. Hàm tạo mã QR Code dưới dạng luồng dữ liệu Bytes (Mới bổ sung)
-def generate_qrcode_stream(short_code: str) -> io.BytesIO:
+def generate_qrcode_stream(
+    short_code: str,
+    fill_color: str = "black",
+    back_color: str = "white",
+    logo_bytes: Optional[bytes] = None,
+    format: str = "png"
+) -> io.BytesIO:
     short_url = f"http://localhost:8000/{short_code}"
     
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    # Chuẩn hóa mã màu hex nếu thiếu dấu #
+    if len(fill_color) == 6 and all(c in "0123456789abcdefABCDEF" for c in fill_color):
+        fill_color = f"#{fill_color}"
+    if len(back_color) == 6 and all(c in "0123456789abcdefABCDEF" for c in back_color):
+        back_color = f"#{back_color}"
+        
+    error_correction = qrcode.constants.ERROR_CORRECT_H if logo_bytes else qrcode.constants.ERROR_CORRECT_M
+    
+    if format.lower() == "svg":
+        import qrcode.image.svg
+        import re
+        import base64
+        
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=error_correction,
+            box_size=10,
+            border=4
+        )
+        qr.add_data(short_url)
+        qr.make(fit=True)
+        
+        img = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+        
+        stream = io.BytesIO()
+        img.save(stream)
+        svg_content = stream.getvalue().decode('utf-8')
+        
+        # Parse viewBox to get size
+        viewbox_match = re.search(r'viewBox="0 0 (\d+) (\d+)"', svg_content)
+        if viewbox_match:
+            width = int(viewbox_match.group(1))
+            height = int(viewbox_match.group(2))
+        else:
+            width, height = 33, 33
+            
+        # Replace fill color of qr path
+        svg_content = re.sub(r'id="qr-path" fill="[^"]+"', f'id="qr-path" fill="{fill_color}"', svg_content)
+        
+        # Insert background rect
+        rect_str = f'<rect width="100%" height="100%" fill="{back_color}"/>'
+        svg_content = re.sub(r'(<svg[^>]*>)', f'\\1{rect_str}', svg_content)
+        
+        if logo_bytes:
+            logo_base64 = base64.b64encode(logo_bytes).decode('utf-8')
+            logo_size = width * 0.25
+            x = (width - logo_size) / 2
+            y = (height - logo_size) / 2
+            
+            mime = "image/png"
+            try:
+                pil_img = Image.open(io.BytesIO(logo_bytes))
+                if pil_img.format:
+                    mime = f"image/{pil_img.format.lower()}"
+            except Exception:
+                pass
+                
+            image_tag = f'<image x="{x}" y="{y}" width="{logo_size}" height="{logo_size}" href="data:{mime};base64,{logo_base64}"/>'
+            svg_content = svg_content.replace('</svg>', f'{image_tag}</svg>')
+            
+        img_byte_arr = io.BytesIO(svg_content.encode('utf-8'))
+        return img_byte_arr
+
+    # Default PNG path
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=error_correction,
+        box_size=10,
+        border=4
+    )
     qr.add_data(short_url)
     qr.make(fit=True)
     
-    img = qr.make_image(fill_color="black", back_color="white")
+    img = qr.make_image(fill_color=fill_color, back_color=back_color).convert('RGBA')
     
+    if logo_bytes:
+        try:
+            logo = Image.open(io.BytesIO(logo_bytes)).convert('RGBA')
+            qr_width, qr_height = img.size
+            logo_size = int(qr_width * 0.25)
+            logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+            
+            pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
+            img.paste(logo, pos, logo)
+        except Exception as e:
+            print(f"Lỗi khi chèn logo vào QR: {e}")
+            
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)

@@ -1,14 +1,21 @@
+import os
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Định nghĩa file Database SQLite sẽ tự động sinh ra
-SQLALCHEMY_DATABASE_URL = "sqlite:///./shortlink.db"
+load_dotenv()
 
-# Khởi tạo Engine kết nối (check_same_thread=False bắt buộc cho SQLite để chạy đa luồng async)
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+# Định nghĩa Database URL
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shortlink.db")
+
+# Khởi tạo Engine kết nối
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    )
+else:
+    engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
 # Tạo SessionLocal: Nơi cấp phát các phiên Đọc/Ghi dữ liệu xuống DB
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -91,3 +91,10 @@ class AdminWorkspaceUpdate(BaseModel):
 class VerifyOTP(BaseModel):
     email: EmailStr
     otp: str
+
+class LinkPermissionCreate(BaseModel):
+    workspace_id: int
+    permission: str
+
+class LinkPasswordVerify(BaseModel):
+    password: str

@@ -10,7 +10,7 @@ export default function App() {
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState(''); 
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [email, setEmail] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
   const [resetToken, setResetToken] = useState('');
@@ -70,6 +70,7 @@ export default function App() {
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterLinkCode, setFilterLinkCode] = useState('all');
+  const [filterDevice, setFilterDevice] = useState('all');
 
   const [workspaces, setWorkspaces] = useState([]);
   const [currentWorkspace, setCurrentWorkspace] = useState('personal');
@@ -128,6 +129,223 @@ export default function App() {
   };
 
   const [toast, setToast] = useState({ show: false, type: 'success', title: '', message: '' });
+
+  // Advanced QR Code States
+  const [qrFillColor, setQrFillColor] = useState('#000000');
+  const [qrBackColor, setQrBackColor] = useState('#ffffff');
+  const [qrLogoFile, setQrLogoFile] = useState(null);
+  const [qrPreviewUrl, setQrPreviewUrl] = useState('');
+
+  // Bot Filtering State
+  const [excludeBots, setExcludeBots] = useState(true);
+
+  // Link Permissions States
+  const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
+  const [permissionLinkCode, setPermissionLinkCode] = useState('');
+  const [permissionsList, setPermissionsList] = useState([]);
+  const [selectedPermissionWsId, setSelectedPermissionWsId] = useState('');
+  const [selectedPermissionType, setSelectedPermissionType] = useState('view_analytics');
+
+  // Workspaces tab States
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('list'); // 'list', 'domains', 'audit'
+  const [workspaceDomains, setWorkspaceDomains] = useState([]);
+  const [selectedWsForDomains, setSelectedWsForDomains] = useState('');
+  const [auditLogs, setAuditLogs] = useState([]);
+
+  // Password Gate States
+  const [passwordGateCode, setPasswordGateCode] = useState('');
+  const [passwordGateInput, setPasswordGateInput] = useState('');
+  const [passwordGateError, setPasswordGateError] = useState('');
+
+  const fetchQrPreview = async () => {
+    if (!selectedShortCode) return;
+    try {
+      const formData = new FormData();
+      formData.append('fill_color', qrFillColor);
+      formData.append('back_color', qrBackColor);
+      if (qrLogoFile) {
+        formData.append('logo', qrLogoFile);
+      }
+      formData.append('format', 'png');
+      
+      const response = await fetch(`${API_URL}/api/qrcode/${selectedShortCode}/custom`, {
+        method: 'POST',
+        body: formData
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (qrPreviewUrl) {
+          URL.revokeObjectURL(qrPreviewUrl);
+        }
+        const url = URL.createObjectURL(blob);
+        setQrPreviewUrl(url);
+      }
+    } catch (err) {
+      console.error("Lỗi tải QR Code custom:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isQrOpen && selectedShortCode) {
+      fetchQrPreview();
+    } else {
+      if (qrPreviewUrl) {
+        URL.revokeObjectURL(qrPreviewUrl);
+      }
+      setQrPreviewUrl('');
+    }
+  }, [qrFillColor, qrBackColor, qrLogoFile, selectedShortCode, isQrOpen]);
+
+  const downloadCustomQr = async (format = 'png') => {
+    try {
+      const formData = new FormData();
+      formData.append('fill_color', qrFillColor);
+      formData.append('back_color', qrBackColor);
+      if (qrLogoFile) {
+        formData.append('logo', qrLogoFile);
+      }
+      formData.append('format', format);
+      
+      const response = await fetch(`${API_URL}/api/qrcode/${selectedShortCode}/custom`, {
+        method: 'POST',
+        body: formData
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `qrcode_${selectedShortCode}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.error(`Lỗi tải file ${format}:`, err);
+    }
+  };
+
+  const fetchLinkPermissions = async (shortCode) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/links/${shortCode}/permissions`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPermissionsList(data.permissions || []);
+      }
+    } catch (err) {
+      console.error("Lỗi lấy thông tin phân quyền link:", err);
+    }
+  };
+
+  const handleAddLinkPermission = async (e) => {
+    e.preventDefault();
+    if (!selectedPermissionWsId) {
+      showNotification('error', '⚠️ Lỗi', 'Vui lòng chọn nhóm làm việc.');
+      return;
+    }
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/links/${permissionLinkCode}/permissions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          workspace_id: parseInt(selectedPermissionWsId),
+          permission: selectedPermissionType
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showNotification('success', '✅ Thành công', data.message || 'Gán quyền thành công.');
+        fetchLinkPermissions(permissionLinkCode);
+      } else {
+        showNotification('error', '💥 Thất bại', data.detail || 'Lỗi gán quyền.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteLinkPermission = async (permId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/links/${permissionLinkCode}/permissions/${permId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showNotification('success', '✅ Thành công', data.message || 'Xóa quyền thành công.');
+        fetchLinkPermissions(permissionLinkCode);
+      } else {
+        showNotification('error', '💥 Thất bại', data.detail || 'Lỗi xóa quyền.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchWorkspaceDomains = async (workspaceId) => {
+    if (!workspaceId) return;
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/workspaces/${workspaceId}/domains`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setWorkspaceDomains(data.domains || []);
+      }
+    } catch (err) {
+      console.error("Lỗi lấy danh sách domain:", err);
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/audit-logs?limit=50`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAuditLogs(data.audit_logs || []);
+      }
+    } catch (err) {
+      console.error("Lỗi lấy nhật ký hoạt động:", err);
+    }
+  };
+
+  const handleVerifyPasswordGate = async (e) => {
+    e.preventDefault();
+    setPasswordGateError('');
+    try {
+      const response = await fetch(`${API_URL}/api/links/${passwordGateCode}/verify-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordGateInput })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.valid) {
+          window.location.href = `${API_URL}/${passwordGateCode}?pwd=${encodeURIComponent(passwordGateInput)}`;
+        } else {
+          setPasswordGateError(lang === 'vi' ? 'Mật khẩu không chính xác!' : 'Incorrect password!');
+        }
+      } else {
+        setPasswordGateError(lang === 'vi' ? 'Có lỗi xảy ra!' : 'An error occurred!');
+      }
+    } catch (err) {
+      console.error(err);
+      setPasswordGateError(lang === 'vi' ? 'Không thể kết nối đến máy chủ!' : 'Could not connect to server!');
+    }
+  };
 
   const MESSAGES = {
     vi: {
@@ -468,9 +686,9 @@ export default function App() {
       const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: resetEmail, 
-          otp: otp.trim() 
+        body: JSON.stringify({
+          email: resetEmail,
+          otp: otp.trim()
         })
       });
       const data = await response.json();
@@ -503,10 +721,10 @@ export default function App() {
       const response = await fetch(`${API_URL}/api/auth/reset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: resetEmail, 
-          otp: otp.trim(), 
-          new_password: resetPassword 
+        body: JSON.stringify({
+          email: resetEmail,
+          otp: otp.trim(),
+          new_password: resetPassword
         })
       });
       const data = await response.json();
@@ -536,6 +754,10 @@ export default function App() {
     if (currentWorkspace && currentWorkspace !== 'personal') {
       params.append('workspace_id', currentWorkspace);
     }
+    if (filterDevice && filterDevice !== 'all') {
+      params.append('device_type', filterDevice);
+    }
+    params.append('exclude_bots', excludeBots ? 'true' : 'false');
     return params.toString() ? `?${params.toString()}` : '';
   };
 
@@ -546,7 +768,7 @@ export default function App() {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
-      
+
       let url = `${API_URL}/api/all-links`;
       if (currentWorkspace && currentWorkspace !== 'personal') {
         url += `?workspace_id=${currentWorkspace}`;
@@ -1003,7 +1225,7 @@ export default function App() {
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
-      
+
       const response = await fetch(`${API_URL}/api/workspaces/${selectedWorkspaceId}/members/${userId}`, {
         method: 'PUT',
         headers: {
@@ -1030,7 +1252,7 @@ export default function App() {
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
-      
+
       const response = await fetch(`${API_URL}/api/workspaces/${selectedWorkspaceId}/members/${userId}`, {
         method: 'DELETE',
         headers: {
@@ -1051,6 +1273,30 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Check if pathname has a potential short code
+    const path = window.location.pathname.replace(/^\/+/g, '');
+    const standardScreens = ['login', 'register', 'forgot', 'reset', 'dashboard', 'workspaces', 'admin', 'linkDetails'];
+    if (path && !standardScreens.includes(path)) {
+      fetch(`${API_URL}/api/links/${path}/check-password`)
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Not found');
+        })
+        .then(data => {
+          if (data.has_password) {
+            setPasswordGateCode(path);
+            setCurrentScreen('password-gate');
+          } else {
+            window.location.href = `${API_URL}/${path}`;
+          }
+        })
+        .catch(err => {
+          console.error("Checking link password req failed:", err);
+          window.location.href = `${API_URL}/${path}`;
+        });
+      return;
+    }
+
     const token = localStorage.getItem('token');
     const savedUser = localStorage.getItem('username');
     const savedRole = localStorage.getItem('role') || 'member';
@@ -1081,13 +1327,13 @@ export default function App() {
     if (links.length === 0) return;
     const targetCode = filterLinkCode === 'all' ? 'all' : filterLinkCode;
     fetchLinkAnalytics(targetCode);
-  }, [filterMode, filterStartDate, filterEndDate, filterLinkCode, currentScreen, links.length]);
+  }, [filterMode, filterStartDate, filterEndDate, filterLinkCode, filterDevice, excludeBots, currentScreen, links.length]);
 
   const getPeakClickDate = () => {
     if (!analyticsData?.charts?.clicks_over_time) return null;
     const entries = Object.entries(analyticsData.charts.clicks_over_time);
     if (entries.length === 0) return null;
-    
+
     let peakDate = '';
     let maxClicks = -1;
     for (const [date, count] of entries) {
@@ -1096,7 +1342,7 @@ export default function App() {
         peakDate = date;
       }
     }
-    
+
     const parts = peakDate.split('-');
     const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : peakDate;
     return { date: formattedDate, clicks: maxClicks };
@@ -1159,16 +1405,16 @@ export default function App() {
   const handleDeleteLink = async (link) => {
     const isActive = link.status === 'active';
     let force = false;
-    
+
     if (isActive) {
-      const confirmMsg = lang === 'vi' 
+      const confirmMsg = lang === 'vi'
         ? 'Liên kết này đang chạy chiến dịch. Chỉ có thể xóa các liên kết đã kết thúc chiến dịch. Bạn có muốn kết thúc chiến dịch và xóa liên kết này ngay lập tức không?'
         : 'This link is currently active. Do you want to end the campaign and delete this link immediately?';
       if (!window.confirm(confirmMsg)) return;
       force = true;
     } else {
-      const confirmMsg = lang === 'vi' 
-        ? 'Bạn có chắc chắn muốn xóa liên kết rút gọn này?' 
+      const confirmMsg = lang === 'vi'
+        ? 'Bạn có chắc chắn muốn xóa liên kết rút gọn này?'
         : 'Are you sure you want to delete this shortened link?';
       if (!window.confirm(confirmMsg)) return;
     }
@@ -1197,7 +1443,7 @@ export default function App() {
     setEditingShortCode(link.short_code);
     setEditLinkStatus(link.status);
     setEditLinkName(link.name || '');
-    
+
     if (link.expired_at) {
       try {
         const date = new Date(link.expired_at);
@@ -1282,7 +1528,7 @@ export default function App() {
   const renderChartSVG = () => {
     let data = [0, 0];
     let labels = ['', ''];
-    
+
     if (analyticsData?.charts?.clicks_over_time) {
       const entries = Object.entries(analyticsData.charts.clicks_over_time);
       if (entries.length > 0) {
@@ -1291,7 +1537,7 @@ export default function App() {
           return parts.length === 3 ? `${parts[2]}/${parts[1]}` : date;
         });
         data = entries.map(([, val]) => val);
-        
+
         if (data.length === 1) {
           data = [0, data[0]];
           labels = ['', labels[0]];
@@ -1306,7 +1552,7 @@ export default function App() {
     const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
     const maxV = Math.max(...data, 10), n = data.length;
     const points = data.map((v, i) => [pad.l + (i / (n - 1)) * iW, pad.t + iH * (1 - v / maxV)]);
-    
+
     let d = `M ${points[0][0]} ${points[0][1]}`;
     for (let i = 1; i < points.length; i++) {
       const cx = (points[i - 1][0] + points[i][0]) / 2;
@@ -1342,6 +1588,70 @@ export default function App() {
     );
   };
 
+  const renderBarChartSVG = () => {
+    let data = Array(24).fill(0);
+    let labels = Array(24).fill("00h");
+    
+    if (analyticsData?.summary?.click_trend && analyticsData.summary.click_trend.length > 0) {
+      data = analyticsData.summary.click_trend.map(t => t.clicks);
+      labels = analyticsData.summary.click_trend.map(t => t.hour);
+    } else {
+      data = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+      labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+    }
+
+    const W = 520, H = 180, pad = { t: 20, r: 20, b: 25, l: 35 };
+    const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+    const maxV = Math.max(...data, 5);
+    const n = data.length;
+    const slotWidth = iW / n;
+    const barWidth = slotWidth * 0.7;
+
+    return (
+      <svg className="w-full h-full" viewBox={`0 0 ${W} ${H}`}>
+        <defs>
+          <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#00cec9" />
+            <stop offset="100%" stopColor="#0984e3" stopOpacity="0.8" />
+          </linearGradient>
+        </defs>
+        {[0, 0.5, 1].map((f, idx) => {
+          const y = pad.t + iH * (1 - f);
+          return (
+            <g key={idx}>
+              <line x1={pad.l} x2={W - pad.r} y1={y} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
+              <text x={pad.l - 8} y={y + 3} textAnchor="end" fontSize="9" fill="rgba(122,122,154,0.5)">{Math.round(maxV * f)}</text>
+            </g>
+          );
+        })}
+        {data.map((val, idx) => {
+          const barHeight = (val / maxV) * iH;
+          const x = pad.l + idx * slotWidth + (slotWidth - barWidth) / 2;
+          const y = H - pad.b - barHeight;
+          return (
+            <g key={idx}>
+              <rect
+                x={x}
+                y={y}
+                width={barWidth}
+                height={Math.max(barHeight, 1)}
+                fill="url(#barGrad)"
+                rx="1.5"
+                className="transition-all duration-300 hover:fill-[#00cec9]"
+              >
+                <title>{`${labels[idx]}: ${val} clicks`}</title>
+              </rect>
+              {idx % 4 === 0 && (
+                <text x={x + barWidth / 2} y={H - 5} textAnchor="middle" fontSize="8" fill="rgba(122,122,154,0.6)">{labels[idx]}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
+
+
   return (
     <div className={`flex min-h-screen ${theme === 'light' ? 'light-theme' : ''} text-[#e8e8f0] bg-[#0a0a0f]`}>
       {toast.show && (
@@ -1351,10 +1661,41 @@ export default function App() {
           <div className="text-[11px] mt-1">{toast.message}</div>
         </div>
       )}
-      
+
+      {currentScreen === 'password-gate' && (
+        <div className="min-h-screen bg-[#0b0b0f] flex items-center justify-center p-4">
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.08)] rounded-2xl w-full max-w-[400px] p-8 shadow-2xl flex flex-col items-center text-center">
+            <div className="text-2xl font-extrabold mb-6 text-white">SLink<span className="text-[#a29bfe]">Track</span></div>
+            <div className="text-5xl mb-4">🔒</div>
+            <h2 className="text-lg font-bold mb-2 text-white">{lang === 'vi' ? 'Mật khẩu bảo vệ' : 'Password Required'}</h2>
+            <p className="text-xs text-[#7a7a9a] mb-6">{lang === 'vi' ? 'Vui lòng nhập mật khẩu truy cập cho liên kết này.' : 'Please enter the access password for this link.'}</p>
+            
+            <form onSubmit={handleVerifyPasswordGate} className="w-full flex flex-col gap-4">
+              {passwordGateError && (
+                <div className="bg-[rgba(255,118,117,0.15)] border border-[rgba(255,118,117,0.3)] text-[#ff7675] text-xs p-3 rounded-lg text-left">
+                  ⚠️ {passwordGateError}
+                </div>
+              )}
+              <input
+                type="password"
+                required
+                className="w-full bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-3 text-xs text-white outline-none focus:border-[#6c5ce7] font-mono"
+                placeholder={lang === 'vi' ? 'Nhập mật khẩu...' : 'Enter password...'}
+                value={passwordGateInput}
+                onChange={(e) => setPasswordGateInput(e.target.value)}
+                autoFocus
+              />
+              <button type="submit" className="w-full bg-[#6c5ce7] text-white text-xs py-3 rounded-lg font-bold hover:bg-[#5b4bc4] cursor-pointer transition-colors">
+                {lang === 'vi' ? 'Xác nhận & Truy cập' : 'Verify & Continue'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {currentScreen === 'login' && (
         <div className="w-full min-h-screen flex items-center justify-center p-6 md:p-12 relative bg-[#0a0a0f] overflow-y-auto">
-          
+
           {/* Đa ngôn ngữ & Sáng tối đặt ở góc trên cùng bên phải */}
           <div className="absolute top-4 right-4 flex items-center gap-2 z-50">
             <select value={lang} onChange={(e) => updateLanguage(e.target.value)} className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-xl px-3 py-1.5 text-xs text-white outline-none cursor-pointer">
@@ -1384,24 +1725,24 @@ export default function App() {
               <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-6 shadow-[0_2px_4px_rgba(0,0,0,0.1),_0_8px_16px_rgba(0,0,0,0.1)] flex flex-col gap-4">
                 <form onSubmit={handleLogin} className="flex flex-col gap-4">
                   {/* Email address field */}
-                  <input 
-                    required 
-                    type="text" 
-                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg px-4 py-3 text-xs text-white outline-none font-mono" 
-                    value={username} 
-                    onChange={(e) => setUsername(e.target.value)} 
-                    placeholder={t.usernameOrEmail} 
+                  <input
+                    required
+                    type="text"
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg px-4 py-3 text-xs text-white outline-none font-mono"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={t.usernameOrEmail}
                   />
 
                   {/* Password field */}
                   <div className="relative flex items-center">
-                    <input 
-                      required 
-                      type={showLoginPassword ? 'text' : 'password'} 
-                      className="w-full bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg px-4 py-3 pr-10 text-xs text-white outline-none font-mono" 
-                      value={password} 
-                      onChange={(e) => setPassword(e.target.value)} 
-                      placeholder={t.password} 
+                    <input
+                      required
+                      type={showLoginPassword ? 'text' : 'password'}
+                      className="w-full bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg px-4 py-3 pr-10 text-xs text-white outline-none font-mono"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={t.password}
                     />
                     <button type="button" className="absolute right-3 text-xs opacity-70 hover:opacity-100" onClick={() => setShowLoginPassword(!showLoginPassword)}>
                       {showLoginPassword ? '👁️' : '🙈'}
@@ -1444,9 +1785,9 @@ export default function App() {
                 <hr className="border-t border-[rgba(255,255,255,0.07)] my-1" />
 
                 {/* Green register button */}
-                <button 
-                  type="button" 
-                  onClick={() => navigateTo('register')} 
+                <button
+                  type="button"
+                  onClick={() => navigateTo('register')}
                   className="bg-[#42b72a] hover:bg-[#36a420] text-white text-xs font-bold py-2.5 px-4 rounded-lg transition-colors mx-auto block cursor-pointer whitespace-nowrap"
                 >
                   {lang === 'vi' ? 'Tạo tài khoản mới' : 'Create new account'}
@@ -1527,28 +1868,28 @@ export default function App() {
           <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-2xl w-[400px] p-8 shadow-2xl relative">
             <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-[#4ade80] to-[#60a5fa]"></div>
             <div className="text-2xl font-extrabold text-[#e8e8f0] mb-6">{t.resetTitle}</div>
-            
+
             {!isOtpVerified ? (
               <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
                 <div className="rounded-xl bg-[#14141c] border border-[rgba(255,255,255,0.06)] p-4 text-[11px] text-[#7a7a9a]">
-                  {lang === 'vi' 
-                    ? `Mã OTP đã được gửi đến email ${resetEmail}. Mã có hiệu lực trong 5 phút.` 
+                  {lang === 'vi'
+                    ? `Mã OTP đã được gửi đến email ${resetEmail}. Mã có hiệu lực trong 5 phút.`
                     : `OTP code sent to email ${resetEmail}. Valid for 5 minutes.`}
                 </div>
-                
+
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mã OTP (6 chữ số)' : 'OTP Code (6 digits)'}</label>
                   <div className="flex gap-2">
                     <input required type="text" maxLength={6} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none font-mono flex-1 text-center text-lg tracking-widest" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} placeholder="123456" />
-                    
-                    <button 
-                      type="button" 
-                      disabled={countdown > 0} 
+
+                    <button
+                      type="button"
+                      disabled={countdown > 0}
                       onClick={handleResendOtp}
                       className={`text-xs px-3 rounded-lg font-bold transition-all cursor-pointer ${countdown > 0 ? 'bg-[#18181f] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] cursor-not-allowed' : 'bg-[#6c5ce7] text-white hover:bg-[#5b4bc4]'}`}
                     >
-                      {countdown > 0 
-                        ? (lang === 'vi' ? `Gửi lại (${countdown}s)` : `Resend (${countdown}s)`) 
+                      {countdown > 0
+                        ? (lang === 'vi' ? `Gửi lại (${countdown}s)` : `Resend (${countdown}s)`)
                         : (lang === 'vi' ? 'Gửi lại OTP' : 'Resend OTP')}
                     </button>
                   </div>
@@ -1567,7 +1908,7 @@ export default function App() {
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mật khẩu mới' : 'New password'}</label>
                   <input required type={showRegPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
                 </div>
-                
+
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{t.confirmPassword}</label>
                   <input required type={showRegConfirmPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
@@ -1576,7 +1917,7 @@ export default function App() {
                 <button type="submit" className="bg-[#4ade80] text-[#0a0a0f] text-xs font-bold py-2.5 rounded-xl cursor-pointer">{t.resetSubmit}</button>
               </form>
             )}
-            
+
             <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => navigateTo('login')}>{t.backToLogin}</button></div>
           </div>
         </div>
@@ -1639,7 +1980,7 @@ export default function App() {
 
               <div className="grid grid-cols-3 gap-4 mb-6">
                 <div className="col-span-2 bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 flex flex-col">
-                  
+
                   {/* BỘ LỌC BIỂU ĐỒ */}
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-[rgba(255,255,255,0.04)]">
                     <div className="text-xs font-bold text-[#a29bfe] uppercase">{lang === 'vi' ? '📊 Thống kê lượt click' : '📊 Click Statistics'}</div>
@@ -1666,12 +2007,27 @@ export default function App() {
                         </select>
                       </div>
 
+                      {/* Lọc theo thiết bị */}
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Thiết bị:' : 'Device:'}</label>
+                        <select className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-1 text-[11px] text-white outline-none" value={filterDevice} onChange={(e) => setFilterDevice(e.target.value)}>
+                          <option value="all">{lang === 'vi' ? 'Tất cả' : 'All'}</option>
+                          <option value="desktop">Desktop</option>
+                          <option value="mobile">Mobile</option>
+                          <option value="tablet">Tablet</option>
+                        </select>
+                      </div>
+
                       {/* Chọn khoảng ngày tùy chỉnh */}
                       {filterMode === 'custom' && (
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <input type="date" className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-0.5 text-[11px] text-white outline-none" value={filterStartDate} onChange={(e) => setFilterStartDate(e.target.value)} />
                           <span className="text-[10px] text-[#7a7a9a]">-</span>
                           <input type="date" className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-0.5 text-[11px] text-white outline-none" value={filterEndDate} onChange={(e) => setFilterEndDate(e.target.value)} />
+                          <label className="flex items-center gap-1.5 text-[10px] text-[#7a7a9a] cursor-pointer bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2 py-0.5 select-none hover:text-white transition-colors">
+                            <input type="checkbox" checked={excludeBots} onChange={(e) => setExcludeBots(e.target.checked)} className="cursor-pointer accent-[#6c5ce7]" />
+                            <span>{lang === 'vi' ? 'Loại trừ Bot' : 'Exclude Bots'}</span>
+                          </label>
                         </div>
                       )}
                     </div>
@@ -1704,11 +2060,14 @@ export default function App() {
                   <tbody>
                     {links.map((link, idx) => (
                       <tr key={idx} className="border-b border-[rgba(255,255,255,0.04)] cursor-pointer" onClick={() => openLinkDetails(link.short_code)}>
-                        <td className="p-4 text-xs font-mono text-[#a29bfe]">{link.domain ? `${link.domain}/${link.short_code}` : `/${link.short_code}`}</td>
+                        <td className="p-4 text-xs font-mono text-[#a29bfe]">
+                          {link.domain ? `${link.domain}/${link.short_code}` : `/${link.short_code}`}
+                          {link.password_hash && <span className="ml-1.5 text-xs text-[#eccc68]" title={lang === 'vi' ? 'Có mật khẩu bảo vệ' : 'Password protected'}>🔒</span>}
+                        </td>
                         <td className="p-4 text-xs font-mono">{link.clicks}</td>
                         <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}><button className="bg-[#18181f] px-2 py-1 border border-[rgba(255,255,255,0.1)] text-xs rounded cursor-pointer" onClick={() => { setSelectedShortCode(link.short_code); setIsQrOpen(true); }}>◼</button></td>
                         <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
-                          <button 
+                          <button
                             className="bg-[#18181f] px-3 py-1 border border-[rgba(255,255,255,0.1)] text-xs rounded cursor-pointer hover:bg-[rgba(108,92,231,0.1)] hover:text-[#a29bfe] transition-colors"
                             onClick={() => {
                               navigator.clipboard.writeText(`${API_URL}/${link.short_code}`);
@@ -1737,7 +2096,7 @@ export default function App() {
                         </td>
                         <td className="p-4 text-center flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                           {link.status !== 'expired' ? (
-                            <button 
+                            <button
                               onClick={() => handleToggleLinkStatus(link.short_code)}
                               className={`px-2 py-1 text-[10px] font-bold rounded border transition-colors cursor-pointer ${link.status === 'active' ? 'bg-[rgba(253,203,110,0.15)] border-[rgba(253,203,110,0.3)] text-[#eccc68] hover:bg-[rgba(253,203,110,0.3)]' : 'bg-[rgba(85,239,196,0.15)] border-[rgba(85,239,196,0.3)] text-[#2ed573] hover:bg-[rgba(85,239,196,0.3)]'}`}
                             >
@@ -1747,16 +2106,28 @@ export default function App() {
                             <span className="text-[10px] text-[#7a7a9a]">-</span>
                           )}
 
+                          <button
+                            onClick={() => {
+                              setPermissionLinkCode(link.short_code);
+                              setSelectedPermissionWsId('');
+                              fetchLinkPermissions(link.short_code);
+                              setIsPermissionModalOpen(true);
+                            }}
+                            className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-2 py-1 text-[10px] rounded text-white hover:bg-[rgba(108,92,231,0.15)] hover:text-[#a29bfe] cursor-pointer transition-colors"
+                          >
+                            🔐 {lang === 'vi' ? 'Quyền' : 'Perms'}
+                          </button>
+
                           {link.status !== 'expired' ? (
-                            <button 
+                            <button
                               onClick={() => openEditModal(link)}
                               className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-2 py-1 text-[10px] rounded text-white hover:bg-[rgba(108,92,231,0.15)] hover:text-[#a29bfe] cursor-pointer transition-colors"
                             >
                               {lang === 'vi' ? '✏️ Sửa' : 'Edit'}
                             </button>
                           ) : (
-                            <button 
-                              disabled 
+                            <button
+                              disabled
                               className="bg-[#18181f] border border-[rgba(255,255,255,0.03)] px-2 py-1 text-[10px] rounded text-[#4a4a6a] cursor-not-allowed"
                               title={lang === 'vi' ? 'Liên kết đã kết thúc không thể sửa đổi' : 'Ended links cannot be edited'}
                             >
@@ -1764,7 +2135,7 @@ export default function App() {
                             </button>
                           )}
 
-                          <button 
+                          <button
                             onClick={() => handleDeleteLink(link)}
                             className="bg-[rgba(255,118,117,0.12)] hover:bg-[rgba(255,118,117,0.25)] border border-[rgba(255,118,117,0.2)] text-[#ff7675] px-2 py-1 text-[10px] rounded cursor-pointer transition-colors"
                           >
@@ -1785,19 +2156,30 @@ export default function App() {
         <div className="w-full min-h-screen bg-[#0a0a0f] p-6">
           <div className="max-w-[1200px] mx-auto">
             <div className="flex items-center justify-between gap-3 mb-5">
-              <div>
-                <div className="text-sm text-[#7a7a9a] uppercase">{t.analyticsTitle}</div>
-                <div className="text-2xl font-bold text-[#e8e8f0]">/{activeShortCode}</div>
+              <div className="flex items-center gap-3">
+                <div>
+                  <div className="text-sm text-[#7a7a9a] uppercase">{t.analyticsTitle}</div>
+                  <div className="text-2xl font-bold text-[#e8e8f0]">/{activeShortCode}</div>
+                </div>
+                {analyticsData?.summary?.peak_hour !== undefined && analyticsData.summary.peak_hour !== -1 && (
+                  <span className="inline-block bg-[#ff7675]/20 text-[#ff7675] border border-[#ff7675]/35 text-[10px] font-bold px-2.5 py-0.5 rounded-full mt-4">
+                    {lang === 'vi' ? `Giờ cao điểm: ${analyticsData.summary.peak_hour}h` : `Peak Hour: ${analyticsData.summary.peak_hour}h`}
+                  </span>
+                )}
               </div>
               <div className="flex gap-2">
                 <button className="bg-[#6c5ce7] px-4 py-2 rounded-lg text-white text-xs" onClick={() => downloadClickCsv(activeShortCode)}>{t.exportData}</button>
                 <button className="bg-[#18181f] border border-[rgba(255,255,255,0.08)] px-4 py-2 rounded-lg text-xs text-[#a29bfe]" onClick={() => { setCurrentScreen('dashboard'); }}>{t.backToDashboard}</button>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-4 gap-4 mb-6">
               <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
                 <div className="text-[11px] text-[#7a7a9a] uppercase">{t.tableClicks}</div>
                 <div className="text-3xl font-extrabold text-[#a29bfe]">{analyticsData?.summary?.total_clicks || 0}</div>
+              </div>
+              <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
+                <div className="text-[11px] text-[#7a7a9a] uppercase">Unique Clicks</div>
+                <div className="text-3xl font-extrabold text-[#00cec9]">{analyticsData?.summary?.unique_clicks || 0}</div>
               </div>
               <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
                 <div className="text-[11px] text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Ngày nhiều click nhất' : 'Peak click date'}</div>
@@ -1815,16 +2197,23 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* BIỂU ĐỒ CỘT CLICK THEO 24 GIỜ */}
+            <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 flex flex-col mb-6">
+              <div className="text-xs font-bold text-[#00cec9] uppercase mb-4">{lang === 'vi' ? '📊 Biểu đồ lượt click theo 24 giờ qua' : '📊 Click chart for the last 24 hours'}</div>
+              <div className="h-[180px] w-full">{renderBarChartSVG()}</div>
+            </div>
+
             <div className="grid grid-cols-4 gap-4 mb-6">
               {analyticsData?.charts && Object.entries(analyticsData.charts)
-                .filter(([label]) => label !== 'clicks_over_time')
+                .filter(([label]) => label !== 'clicks_over_time' && label !== 'top_countries' && label !== 'top_cities')
                 .map(([label, values]) => {
                   let labelText = label;
                   if (label === 'devices') labelText = lang === 'vi' ? '📱 Thiết bị' : 'Devices';
                   else if (label === 'operating_systems') labelText = lang === 'vi' ? '💻 Hệ điều hành' : 'Operating Systems';
                   else if (label === 'browsers') labelText = lang === 'vi' ? '🌐 Trình duyệt' : 'Browsers';
                   else if (label === 'traffic_sources') labelText = lang === 'vi' ? '🚦 Nguồn truy cập' : 'Traffic Sources';
-                  
+
                   return (
                     <div key={label} className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
                       <div className="text-[11px] text-[#7a7a9a] uppercase mb-3 font-bold">{labelText}</div>
@@ -1842,6 +2231,59 @@ export default function App() {
                     </div>
                   );
                 })}
+            </div>
+
+            {/* BẢNG TOP QUỐC GIA & THÀNH PHỐ VỚI PROGRESS BAR */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
+                <div className="text-[11px] text-[#7a7a9a] uppercase mb-4 font-bold">{lang === 'vi' ? '🌍 Top Quốc Gia' : '🌍 Top Countries'}</div>
+                <div className="space-y-3">
+                  {analyticsData?.charts?.top_countries && Object.entries(analyticsData.charts.top_countries).length > 0 ? (
+                    Object.entries(analyticsData.charts.top_countries).map(([country, count]) => {
+                      const maxVal = Math.max(...Object.values(analyticsData.charts.top_countries), 1);
+                      const percentage = Math.round((count / maxVal) * 100);
+                      return (
+                        <div key={country} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#e8e8f0]">{country}</span>
+                            <span className="text-[#a29bfe] font-bold">{count} ({percentage}%)</span>
+                          </div>
+                          <div className="w-full bg-[#18181f] h-2 rounded-full overflow-hidden">
+                            <div className="bg-[#6c5ce7] h-full rounded-full transition-all duration-500" style={{ width: `${percentage}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-xs italic text-[#7a7a9a]">Chưa có dữ liệu.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
+                <div className="text-[11px] text-[#7a7a9a] uppercase mb-4 font-bold">{lang === 'vi' ? '🏢 Top Thành Phố' : '🏢 Top Cities'}</div>
+                <div className="space-y-3">
+                  {analyticsData?.charts?.top_cities && Object.entries(analyticsData.charts.top_cities).length > 0 ? (
+                    Object.entries(analyticsData.charts.top_cities).map(([city, count]) => {
+                      const maxVal = Math.max(...Object.values(analyticsData.charts.top_cities), 1);
+                      const percentage = Math.round((count / maxVal) * 100);
+                      return (
+                        <div key={city} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#e8e8f0]">{city}</span>
+                            <span className="text-[#00cec9] font-bold">{count} ({percentage}%)</span>
+                          </div>
+                          <div className="w-full bg-[#18181f] h-2 rounded-full overflow-hidden">
+                            <div className="bg-[#00cec9] h-full rounded-full transition-all duration-500" style={{ width: `${percentage}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-xs italic text-[#7a7a9a]">Chưa có dữ liệu.</div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {analyticsData?.edit_history && analyticsData.edit_history.length > 0 && (
@@ -1919,13 +2361,13 @@ export default function App() {
               <input type="password" autoComplete="new-password" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder={lang === 'vi' ? 'Mật khẩu bảo vệ (Không bắt buộc)' : 'Protection password (Optional)'} />
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Ngày hết hạn (Không bắt buộc)' : 'Expiration date (Optional)'}</label>
-                <input 
-                  type="datetime-local" 
-                  onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
-                  onFocus={(e) => { try { e.target.showPicker(); } catch (err) {} }}
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none cursor-pointer" 
-                  value={expiredAt} 
-                  onChange={(e) => setExpiredAt(e.target.value)} 
+                <input
+                  type="datetime-local"
+                  onClick={(e) => { try { e.target.showPicker(); } catch (err) { } }}
+                  onFocus={(e) => { try { e.target.showPicker(); } catch (err) { } }}
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none cursor-pointer"
+                  value={expiredAt}
+                  onChange={(e) => setExpiredAt(e.target.value)}
                 />
               </div>
               <select className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white outline-none" value={selectedWorkspaceForLink} onChange={(e) => setSelectedWorkspaceForLink(e.target.value)}>
@@ -1956,10 +2398,140 @@ export default function App() {
       {/* MODAL XEM QR ĐỘC LẬP */}
       {isQrOpen && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[340px] p-6 flex flex-col items-center gap-4">
-            <div className="w-full flex justify-between items-center"><span className="text-xs font-bold">{t.qrTitle}</span><button onClick={() => setIsQrOpen(false)}>✕</button></div>
-            <div className="bg-white p-3 rounded-xl"><img src={`${API_URL}/api/qrcode/${selectedShortCode}`} alt="QR" className="w-[150px] h-[150px]" /></div>
-            <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded">{API_URL.replace("https://", "").replace("http://", "")}/{selectedShortCode}</div>
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[360px] p-6 flex flex-col items-center gap-4 shadow-2xl">
+            <div className="w-full flex justify-between items-center"><span className="text-xs font-bold">{t.qrTitle}</span><button className="cursor-pointer" onClick={() => setIsQrOpen(false)}>✕</button></div>
+            
+            {/* Custom color options */}
+            <div className="w-full flex gap-3 bg-[#18181f] p-3 rounded-lg border border-[rgba(255,255,255,0.05)] text-xs">
+              <div className="flex-1 flex flex-col gap-1">
+                <label className="text-[10px] text-[#7a7a9a] uppercase font-bold">{lang === 'vi' ? 'Màu mã' : 'QR Color'}</label>
+                <div className="flex items-center gap-1.5">
+                  <input type="color" className="w-6 h-6 border-0 p-0 bg-transparent cursor-pointer rounded" value={qrFillColor} onChange={(e) => setQrFillColor(e.target.value)} />
+                  <span className="font-mono text-[10px]">{qrFillColor}</span>
+                </div>
+              </div>
+              <div className="flex-1 flex flex-col gap-1">
+                <label className="text-[10px] text-[#7a7a9a] uppercase font-bold">{lang === 'vi' ? 'Màu nền' : 'Background'}</label>
+                <div className="flex items-center gap-1.5">
+                  <input type="color" className="w-6 h-6 border-0 p-0 bg-transparent cursor-pointer rounded" value={qrBackColor} onChange={(e) => setQrBackColor(e.target.value)} />
+                  <span className="font-mono text-[10px]">{qrBackColor}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Logo Upload option */}
+            <div className="w-full flex flex-col gap-1 bg-[#18181f] p-3 rounded-lg border border-[rgba(255,255,255,0.05)] text-xs">
+              <label className="text-[10px] text-[#7a7a9a] uppercase font-bold">{lang === 'vi' ? 'Chèn Logo' : 'Insert Logo'}</label>
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="file"
+                  id="logo-upload"
+                  accept="image/png, image/jpeg"
+                  className="hidden"
+                  onChange={(e) => setQrLogoFile(e.target.files?.[0] || null)}
+                />
+                <label htmlFor="logo-upload" className="bg-[#6c5ce7] text-white text-[10px] px-2.5 py-1.5 rounded cursor-pointer hover:bg-[#5b4bc4] transition-all font-bold">
+                  Upload Logo
+                </label>
+                <span className="text-[10px] text-[#7a7a9a] truncate max-w-[150px]">
+                  {qrLogoFile ? qrLogoFile.name : (lang === 'vi' ? 'Chưa chọn file' : 'No file chosen')}
+                </span>
+                {qrLogoFile && (
+                  <button type="button" className="text-red-500 font-bold ml-auto text-[10px]" onClick={() => setQrLogoFile(null)}>✕</button>
+                )}
+              </div>
+            </div>
+
+            {/* QR Preview with fallback */}
+            <div className="bg-white p-3 rounded-xl flex items-center justify-center w-[174px] h-[174px]">
+              <img
+                src={qrPreviewUrl || `${API_URL}/api/qrcode/${selectedShortCode}`}
+                alt="QR"
+                className="w-[150px] h-[150px]"
+              />
+            </div>
+
+            <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded w-full text-center truncate">
+              {API_URL.replace("https://", "").replace("http://", "")}/{selectedShortCode}
+            </div>
+
+            {/* Download buttons */}
+            <div className="w-full flex gap-2">
+              <button
+                className="flex-1 bg-[#6c5ce7] text-white text-xs py-2 rounded-lg font-bold hover:bg-[#5b4bc4] cursor-pointer"
+                onClick={() => downloadCustomQr('png')}
+              >
+                Download PNG
+              </button>
+              <button
+                className="flex-1 bg-[#18181f] text-[#a29bfe] border border-[rgba(108,92,231,0.3)] text-xs py-2 rounded-lg font-bold hover:bg-[rgba(108,92,231,0.15)] cursor-pointer"
+                onClick={() => downloadCustomQr('svg')}
+              >
+                Download SVG
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PHÂN QUYỀN TRUY CẬP LINK */}
+      {isPermissionModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[450px] p-6 flex flex-col gap-4 shadow-2xl">
+            <div className="w-full flex justify-between items-center">
+              <span className="text-xs font-bold flex items-center gap-1">🔐 {lang === 'vi' ? `Quản lý quyền: /${permissionLinkCode}` : `Manage Permissions: /${permissionLinkCode}`}</span>
+              <button className="text-sm cursor-pointer" onClick={() => setIsPermissionModalOpen(false)}>✕</button>
+            </div>
+            
+            <form onSubmit={handleAddLinkPermission} className="flex gap-2 items-end bg-[#18181f] p-3 rounded-lg border border-[rgba(255,255,255,0.05)]">
+              <div className="flex-1 flex flex-col gap-1">
+                <label className="text-[9px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Nhóm nhận quyền' : 'Target Workspace'}</label>
+                <select
+                  value={selectedPermissionWsId}
+                  onChange={(e) => setSelectedPermissionWsId(e.target.value)}
+                  className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded p-2 text-xs text-white outline-none cursor-pointer"
+                >
+                  <option value="">-- {lang === 'vi' ? 'Chọn nhóm' : 'Select workspace'} --</option>
+                  {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                </select>
+              </div>
+              <div className="w-[120px] flex flex-col gap-1">
+                <label className="text-[9px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Quyền hạn' : 'Permission'}</label>
+                <select
+                  value={selectedPermissionType}
+                  onChange={(e) => setSelectedPermissionType(e.target.value)}
+                  className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded p-2 text-xs text-white outline-none cursor-pointer"
+                >
+                  <option value="view_analytics">{lang === 'vi' ? 'Xem thống kê' : 'View analytics'}</option>
+                  <option value="hide_analytics">{lang === 'vi' ? 'Ẩn thống kê' : 'Hide analytics'}</option>
+                  <option value="manage">{lang === 'vi' ? 'Quản lý toàn quyền' : 'Manage all'}</option>
+                </select>
+              </div>
+              <button type="submit" className="bg-[#6c5ce7] text-white text-xs px-4 py-2.5 rounded font-bold hover:bg-[#5b4bc4] cursor-pointer">
+                {lang === 'vi' ? 'Thêm' : 'Add'}
+              </button>
+            </form>
+            
+            <div className="flex flex-col gap-2 max-h-[200px] overflow-y-auto pr-1">
+              <span className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Danh sách phân quyền' : 'Permissions List'}</span>
+              {permissionsList.map((perm) => (
+                <div key={perm.id} className="flex justify-between items-center bg-[#18181f]/50 p-2.5 rounded border border-[rgba(255,255,255,0.03)] text-xs">
+                  <div>
+                    <span className="font-semibold text-white">{perm.workspace_name}</span>
+                    <span className="mx-2 text-[#7a7a9a]">•</span>
+                    <span className="text-[#a29bfe] font-mono text-[10px] uppercase bg-[rgba(108,92,231,0.1)] px-1.5 py-0.5 rounded">{perm.permission}</span>
+                  </div>
+                  <button className="text-[10px] text-[#ff7675] hover:text-[#ff4757] font-semibold cursor-pointer" onClick={() => handleDeleteLinkPermission(perm.id)}>
+                    {lang === 'vi' ? 'Xóa' : 'Remove'}
+                  </button>
+                </div>
+              ))}
+              {permissionsList.length === 0 && (
+                <div className="text-xs italic text-[#7a7a9a] text-center py-4 bg-[#18181f]/20 rounded border border-dashed border-[rgba(255,255,255,0.05)]">
+                  {lang === 'vi' ? 'Chưa phân quyền cho nhóm nào.' : 'No permissions shared yet.'}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1972,27 +2544,27 @@ export default function App() {
               <span>✏️ {lang === 'vi' ? 'Chỉnh sửa liên kết' : 'Edit Link'}</span>
               <button className="text-sm font-normal text-[#7a7a9a] cursor-pointer" onClick={() => setIsEditModalOpen(false)}>✕</button>
             </h3>
-            
+
             <form onSubmit={handleEditSubmit} className="flex flex-col gap-4">
               {editLinkStatus === 'paused' && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">
                     {lang === 'vi' ? 'Tên liên kết (Có thể sửa khi đang tạm dừng)' : 'Link Name (Editable when paused)'}
                   </label>
-                  <input 
-                    type="text" 
-                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                    value={editLinkName} 
-                    onChange={(e) => setEditLinkName(e.target.value)} 
-                    placeholder={lang === 'vi' ? 'Tên liên kết...' : 'Link name...'} 
+                  <input
+                    type="text"
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                    value={editLinkName}
+                    onChange={(e) => setEditLinkName(e.target.value)}
+                    placeholder={lang === 'vi' ? 'Tên liên kết...' : 'Link name...'}
                   />
                 </div>
               )}
-              
+
               {editLinkStatus === 'active' && (
                 <div className="rounded-lg bg-[rgba(108,92,231,0.1)] border border-[rgba(108,92,231,0.2)] p-3 text-[11px] text-[#a29bfe]">
-                  💡 {lang === 'vi' 
-                    ? 'Liên kết đang hoạt động: Bạn chỉ được phép thay đổi thời gian kết thúc chiến dịch.' 
+                  💡 {lang === 'vi'
+                    ? 'Liên kết đang hoạt động: Bạn chỉ được phép thay đổi thời gian kết thúc chiến dịch.'
                     : 'Link is active: You are only allowed to modify the expiration date.'}
                 </div>
               )}
@@ -2001,13 +2573,13 @@ export default function App() {
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">
                   {lang === 'vi' ? 'Thời gian kết thúc (Không được nhỏ hơn ngày sửa)' : 'Expiration date (Must not be in past)'}
                 </label>
-                <input 
-                  type="datetime-local" 
-                  onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
-                  onFocus={(e) => { try { e.target.showPicker(); } catch (err) {} }}
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white font-mono outline-none cursor-pointer" 
-                  value={editExpiredAt} 
-                  onChange={(e) => setEditExpiredAt(e.target.value)} 
+                <input
+                  type="datetime-local"
+                  onClick={(e) => { try { e.target.showPicker(); } catch (err) { } }}
+                  onFocus={(e) => { try { e.target.showPicker(); } catch (err) { } }}
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white font-mono outline-none cursor-pointer"
+                  value={editExpiredAt}
+                  onChange={(e) => setEditExpiredAt(e.target.value)}
                 />
                 <span className="text-[9px] text-[#7a7a9a] px-1 mt-0.5">
                   {lang === 'vi' ? '* Xóa trống ngày nếu muốn chạy vô thời hạn' : '* Leave blank for unlimited duration'}
@@ -2199,34 +2771,159 @@ export default function App() {
                 </select>
               </div>
             </div>
-            
+
             <div className="p-7">
-              <div className="grid grid-cols-3 gap-4">
-                {workspaces.map(ws => (
-                  <div key={ws.id} className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 relative">
-                    <div className="text-lg font-bold mb-1">{ws.name}</div>
-                    <div className="text-[11px] text-[#7a7a9a] mb-4">Role: <span className="text-[#a29bfe] uppercase">{ws.role}</span></div>
-                    <div className="flex gap-2 flex-wrap">
-                      <button className="text-xs bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-3 py-1.5 rounded-lg text-[#a29bfe] cursor-pointer hover:bg-[rgba(255,255,255,0.03)] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setSelectedWorkspaceName(ws.name); fetchWorkspaceMembers(ws.id); setIsMembersListOpen(true); }}>
-                        {t.viewMembers}
-                      </button>
-                      <button className="text-xs bg-[rgba(0,206,201,0.15)] border border-[rgba(0,206,201,0.3)] px-3 py-1.5 rounded-lg text-[#00cec9] cursor-pointer hover:bg-[rgba(0,206,201,0.3)] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setSelectedWorkspaceName(ws.name); fetchWorkspaceLinks(ws.id); setIsWorkspaceLinksOpen(true); }}>
-                        🔗 {t.viewLinks}
-                      </button>
-                      {ws.role === 'owner' && (
-                        <button className="text-xs bg-[#6c5ce7] border border-transparent px-3 py-1.5 rounded-lg text-white cursor-pointer hover:bg-[#5b4bc4] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setIsInviteOpen(true); }}>
-                          {t.inviteMember}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {workspaces.length === 0 && (
-                  <div className="col-span-3 text-sm text-[#7a7a9a] italic">
-                    {lang === 'vi' ? 'Bạn chưa tham gia không gian làm việc nào.' : 'You have not joined any workspaces.'}
-                  </div>
-                )}
+              {/* Tab Navigation inside Workspaces Screen */}
+              <div className="flex gap-4 border-b border-[rgba(255,255,255,0.07)] pb-2 mb-6 text-xs">
+                <button
+                  className={`font-bold pb-2 border-b-2 cursor-pointer transition-colors ${activeWorkspaceTab === 'list' ? 'border-[#6c5ce7] text-[#a29bfe]' : 'border-transparent text-[#7a7a9a] hover:text-white'}`}
+                  onClick={() => setActiveWorkspaceTab('list')}
+                >
+                  👥 {lang === 'vi' ? 'Nhóm làm việc' : 'Workspaces'}
+                </button>
+                <button
+                  className={`font-bold pb-2 border-b-2 cursor-pointer transition-colors ${activeWorkspaceTab === 'domains' ? 'border-[#6c5ce7] text-[#a29bfe]' : 'border-transparent text-[#7a7a9a] hover:text-white'}`}
+                  onClick={() => {
+                    setActiveWorkspaceTab('domains');
+                    if (workspaces.length > 0) {
+                      setSelectedWsForDomains(workspaces[0].id.toString());
+                      fetchWorkspaceDomains(workspaces[0].id);
+                    }
+                  }}
+                >
+                  🌐 {lang === 'vi' ? 'Tên miền' : 'Domains'}
+                </button>
+                <button
+                  className={`font-bold pb-2 border-b-2 cursor-pointer transition-colors ${activeWorkspaceTab === 'audit' ? 'border-[#6c5ce7] text-[#a29bfe]' : 'border-transparent text-[#7a7a9a] hover:text-white'}`}
+                  onClick={() => {
+                    setActiveWorkspaceTab('audit');
+                    fetchAuditLogs();
+                  }}
+                >
+                  📜 {lang === 'vi' ? 'Lịch sử hoạt động' : 'Activity Log'}
+                </button>
               </div>
+
+              {activeWorkspaceTab === 'list' && (
+                <div className="grid grid-cols-3 gap-4">
+                  {workspaces.map(ws => (
+                    <div key={ws.id} className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 relative">
+                      <div className="text-lg font-bold mb-1">{ws.name}</div>
+                      <div className="text-[11px] text-[#7a7a9a] mb-4">Role: <span className="text-[#a29bfe] uppercase">{ws.role}</span></div>
+                      <div className="flex gap-2 flex-wrap">
+                        <button className="text-xs bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-3 py-1.5 rounded-lg text-[#a29bfe] cursor-pointer hover:bg-[rgba(255,255,255,0.03)] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setSelectedWorkspaceName(ws.name); fetchWorkspaceMembers(ws.id); setIsMembersListOpen(true); }}>
+                          {t.viewMembers}
+                        </button>
+                        <button className="text-xs bg-[rgba(0,206,201,0.15)] border border-[rgba(0,206,201,0.3)] px-3 py-1.5 rounded-lg text-[#00cec9] cursor-pointer hover:bg-[rgba(0,206,201,0.3)] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setSelectedWorkspaceName(ws.name); fetchWorkspaceLinks(ws.id); setIsWorkspaceLinksOpen(true); }}>
+                          🔗 {t.viewLinks}
+                        </button>
+                        {ws.role === 'owner' && (
+                          <button className="text-xs bg-[#6c5ce7] border border-transparent px-3 py-1.5 rounded-lg text-white cursor-pointer hover:bg-[#5b4bc4] transition-colors" onClick={() => { setSelectedWorkspaceId(ws.id); setIsInviteOpen(true); }}>
+                            {t.inviteMember}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {workspaces.length === 0 && (
+                    <div className="col-span-3 text-sm text-[#7a7a9a] italic">
+                      {lang === 'vi' ? 'Bạn chưa tham gia không gian làm việc nào.' : 'You have not joined any workspaces.'}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeWorkspaceTab === 'domains' && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-[#7a7a9a] uppercase font-bold">{lang === 'vi' ? 'Chọn nhóm:' : 'Select workspace:'}</label>
+                    <select
+                      value={selectedWsForDomains}
+                      onChange={(e) => {
+                        setSelectedWsForDomains(e.target.value);
+                        fetchWorkspaceDomains(parseInt(e.target.value));
+                      }}
+                      className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                    >
+                      {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
+                    </select>
+                  </div>
+                  
+                  <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl overflow-hidden mt-2">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-[#18181f] text-[11px] text-[#4a4a6a] border-b border-[rgba(255,255,255,0.07)]">
+                          <th className="p-4">{lang === 'vi' ? 'Tên miền' : 'Domain Name'}</th>
+                          <th className="p-4">{lang === 'vi' ? 'Phân loại' : 'Type'}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workspaceDomains.map((dom, index) => (
+                          <tr key={index} className="border-b border-[rgba(255,255,255,0.04)]">
+                            <td className="p-4 text-xs font-mono text-[#a29bfe]">{dom.domain_name}</td>
+                            <td className="p-4 text-xs">
+                              {dom.workspace_id ? (
+                                <span className="px-2 py-0.5 rounded bg-[rgba(108,92,231,0.15)] text-[#a29bfe] text-[10px] font-bold">
+                                  {lang === 'vi' ? 'Riêng tư nhóm' : 'Workspace Private'}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-[rgba(85,239,196,0.15)] text-[#2ed573] text-[10px] font-bold">
+                                  {lang === 'vi' ? 'Dùng chung' : 'Shared Public'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {workspaceDomains.length === 0 && (
+                          <tr>
+                            <td colSpan="2" className="p-4 text-xs italic text-[#7a7a9a]">
+                              {lang === 'vi' ? 'Không có tên miền nào.' : 'No domains found.'}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {activeWorkspaceTab === 'audit' && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs text-[#7a7a9a] uppercase font-bold">{lang === 'vi' ? 'Timeline hoạt động gần đây (Tối đa 50)' : 'Recent activity timeline (Max 50)'}</h4>
+                    <button className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-3 py-1 text-xs rounded text-white hover:bg-[rgba(255,255,255,0.03)] cursor-pointer" onClick={fetchAuditLogs}>
+                      🔄 {lang === 'vi' ? 'Làm mới' : 'Refresh'}
+                    </button>
+                  </div>
+                  <div className="relative pl-6 border-l border-[rgba(255,255,255,0.1)] flex flex-col gap-6 mt-4">
+                    {auditLogs.map((log) => {
+                      let actionColor = 'bg-[#7a7a9a]';
+                      let actionIcon = '📝';
+                      if (log.action === 'create_link') { actionColor = 'bg-[#2ed573]'; actionIcon = '✨'; }
+                      else if (log.action === 'update_link') { actionColor = 'bg-[#eccc68]'; actionIcon = '⚙️'; }
+                      else if (log.action === 'update_permission') { actionColor = 'bg-[#a29bfe]'; actionIcon = '🔐'; }
+                      else if (log.action === 'invite_member') { actionColor = 'bg-[#ff4757]'; actionIcon = '👥'; }
+                      
+                      return (
+                        <div key={log.id} className="relative flex flex-col gap-1">
+                          <span className={`absolute -left-[31px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white font-bold ${actionColor}`}>
+                            {actionIcon}
+                          </span>
+                          <div className="text-xs font-semibold">{log.detail}</div>
+                          <div className="text-[10px] text-[#7a7a9a]">
+                            <span>{log.action}</span> • <span className="font-mono">{new Date(log.created_at).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {auditLogs.length === 0 && (
+                      <div className="text-xs italic text-[#7a7a9a]">
+                        {lang === 'vi' ? 'Chưa có hoạt động nào được ghi lại.' : 'No activity recorded yet.'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2261,7 +2958,7 @@ export default function App() {
               <div className="text-sm font-bold flex items-center gap-2">
                 <span>⚙️ {lang === 'vi' ? 'Hệ thống Quản trị viên' : 'System Administrator Panel'}</span>
               </div>
-              
+
               <div className="flex items-center gap-2">
                 <button className="text-xs bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-3 py-1.5 rounded-lg text-white hover:bg-[rgba(255,255,255,0.05)] cursor-pointer transition-colors" onClick={fetchAdminData}>
                   🔄 {lang === 'vi' ? 'Làm mới' : 'Refresh'}
@@ -2281,19 +2978,19 @@ export default function App() {
             <div className="p-7">
               {/* Tab Navigation */}
               <div className="flex gap-2 mb-4 border-b border-[rgba(255,255,255,0.07)] pb-3">
-                <button 
+                <button
                   onClick={() => setAdminTab('users')}
                   className={`text-xs px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${adminTab === 'users' ? 'bg-[#6c5ce7] text-white' : 'bg-[#111118] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] hover:text-white'}`}
                 >
                   👥 {lang === 'vi' ? 'Người dùng' : 'Users'} ({adminUsers.length})
                 </button>
-                <button 
+                <button
                   onClick={() => setAdminTab('links')}
                   className={`text-xs px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${adminTab === 'links' ? 'bg-[#6c5ce7] text-white' : 'bg-[#111118] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] hover:text-white'}`}
                 >
                   🔗 {lang === 'vi' ? 'Liên kết rút gọn' : 'Shortened Links'} ({adminLinks.length})
                 </button>
-                <button 
+                <button
                   onClick={() => setAdminTab('workspaces')}
                   className={`text-xs px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${adminTab === 'workspaces' ? 'bg-[#6c5ce7] text-white' : 'bg-[#111118] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] hover:text-white'}`}
                 >
@@ -2308,7 +3005,7 @@ export default function App() {
                 </div>
                 <div>
                   {adminTab === 'users' && (
-                    <button 
+                    <button
                       onClick={() => {
                         setAdminEditingUser(null);
                         setAdminUserEmail('');
@@ -2323,7 +3020,7 @@ export default function App() {
                     </button>
                   )}
                   {adminTab === 'links' && (
-                    <button 
+                    <button
                       onClick={() => {
                         setAdminEditingLink(null);
                         setAdminLinkUrl('');
@@ -2340,7 +3037,7 @@ export default function App() {
                     </button>
                   )}
                   {adminTab === 'workspaces' && (
-                    <button 
+                    <button
                       onClick={() => {
                         setAdminEditingWorkspace(null);
                         setAdminWorkspaceName('');
@@ -2389,7 +3086,7 @@ export default function App() {
                             <td className="p-4 font-mono text-[#7a7a9a]">{u.created_at}</td>
                             <td className="p-4 text-center">
                               <div className="flex gap-2 justify-center">
-                                <button 
+                                <button
                                   onClick={() => {
                                     setAdminEditingUser(u);
                                     setAdminUserEmail(u.email);
@@ -2402,7 +3099,7 @@ export default function App() {
                                 >
                                   ✏️ {lang === 'vi' ? 'Sửa' : 'Edit'}
                                 </button>
-                                <button 
+                                <button
                                   disabled={u.email === 'adminslt@gmail.com'}
                                   onClick={() => handleAdminDeleteUser(u.id)}
                                   className={`text-[10px] px-2 py-1 rounded cursor-pointer transition-colors ${u.email === 'adminslt@gmail.com' ? 'bg-[#18181f] text-[#7a7a9a] cursor-not-allowed opacity-50' : 'bg-[rgba(255,118,117,0.15)] text-[#ff7675] hover:bg-[rgba(255,118,117,0.3)]'}`}
@@ -2467,7 +3164,7 @@ export default function App() {
                             <td className="p-4 font-mono text-[#7a7a9a]">{l.created_at}</td>
                             <td className="p-4 text-center">
                               <div className="flex gap-2 justify-center">
-                                <button 
+                                <button
                                   onClick={() => {
                                     setAdminEditingLink(l);
                                     setAdminLinkUrl(l.original_url);
@@ -2481,7 +3178,7 @@ export default function App() {
                                 >
                                   ✏️ {lang === 'vi' ? 'Sửa' : 'Edit'}
                                 </button>
-                                <button 
+                                <button
                                   onClick={() => handleAdminDeleteLink(l.id)}
                                   className="text-[10px] bg-[rgba(255,118,117,0.15)] text-[#ff7675] hover:bg-[rgba(255,118,117,0.3)] px-2 py-1 rounded cursor-pointer transition-colors"
                                 >
@@ -2525,7 +3222,7 @@ export default function App() {
                             <td className="p-4 font-mono text-[#7a7a9a]">{w.created_at}</td>
                             <td className="p-4 text-center">
                               <div className="flex gap-2 justify-center">
-                                <button 
+                                <button
                                   onClick={() => {
                                     setAdminEditingWorkspace(w);
                                     setAdminWorkspaceName(w.name);
@@ -2536,7 +3233,7 @@ export default function App() {
                                 >
                                   ✏️ {lang === 'vi' ? 'Sửa' : 'Edit'}
                                 </button>
-                                <button 
+                                <button
                                   onClick={() => handleAdminDeleteWorkspace(w.id)}
                                   className="text-[10px] bg-[rgba(255,118,117,0.15)] text-[#ff7675] hover:bg-[rgba(255,118,117,0.3)] px-2 py-1 rounded cursor-pointer transition-colors"
                                 >
@@ -2567,53 +3264,53 @@ export default function App() {
             <form onSubmit={handleAdminUserSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">Email</label>
-                <input 
-                  required 
+                <input
+                  required
                   disabled={!!adminEditingUser}
-                  type="email" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none disabled:opacity-50" 
-                  value={adminUserEmail} 
-                  onChange={(e) => setAdminUserEmail(e.target.value)} 
-                  placeholder="user@example.com" 
+                  type="email"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none disabled:opacity-50"
+                  value={adminUserEmail}
+                  onChange={(e) => setAdminUserEmail(e.target.value)}
+                  placeholder="user@example.com"
                 />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Tên tài khoản (Username)' : 'Username'}</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   autoComplete="off"
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminUserUsername} 
-                  onChange={(e) => setAdminUserUsername(e.target.value)} 
-                  placeholder="username" 
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminUserUsername}
+                  onChange={(e) => setAdminUserUsername(e.target.value)}
+                  placeholder="username"
                 />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">
                   {lang === 'vi' ? 'Mật khẩu' : 'Password'} {adminEditingUser && `(${lang === 'vi' ? 'Bỏ trống nếu không đổi' : 'Leave blank to keep'})`}
                 </label>
-                <input 
+                <input
                   required={!adminEditingUser}
-                  type="password" 
+                  type="password"
                   autoComplete="new-password"
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminUserPassword} 
-                  onChange={(e) => setAdminUserPassword(e.target.value)} 
-                  placeholder="******" 
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminUserPassword}
+                  onChange={(e) => setAdminUserPassword(e.target.value)}
+                  placeholder="******"
                 />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Vai trò hệ thống' : 'System Role'}</label>
-                <select 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none cursor-pointer" 
-                  value={adminUserRole} 
+                <select
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none cursor-pointer"
+                  value={adminUserRole}
                   onChange={(e) => setAdminUserRole(e.target.value)}
                 >
                   <option value="member">MEMBER</option>
                   <option value="admin">ADMIN</option>
                 </select>
               </div>
-              
+
               <div className="flex justify-end gap-2 pt-2 border-t border-[rgba(255,255,255,0.05)]">
                 <button type="button" className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-2 rounded-lg text-xs text-[#a29bfe] cursor-pointer" onClick={() => setIsAdminUserModalOpen(false)}>
                   {lang === 'vi' ? 'Hủy' : 'Cancel'}
@@ -2638,45 +3335,45 @@ export default function App() {
             <form onSubmit={handleAdminLinkSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Tên liên kết' : 'Link Name'}</label>
-                <input 
-                  type="text" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminLinkName} 
-                  onChange={(e) => setAdminLinkName(e.target.value)} 
-                  placeholder={lang === 'vi' ? 'Ví dụ: Chiến dịch hè' : 'e.g. Summer Campaign'} 
+                <input
+                  type="text"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminLinkName}
+                  onChange={(e) => setAdminLinkName(e.target.value)}
+                  placeholder={lang === 'vi' ? 'Ví dụ: Chiến dịch hè' : 'e.g. Summer Campaign'}
                 />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Liên kết gốc (Destination URL)' : 'Destination URL'}</label>
-                <input 
-                  required 
-                  type="url" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminLinkUrl} 
-                  onChange={(e) => setAdminLinkUrl(e.target.value)} 
-                  placeholder="https://example.com/very-long-url" 
+                <input
+                  required
+                  type="url"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminLinkUrl}
+                  onChange={(e) => setAdminLinkUrl(e.target.value)}
+                  placeholder="https://example.com/very-long-url"
                 />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Alias / Shortcode' : 'Shortcode'}</label>
-                <input 
-                  type="text" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminLinkAlias} 
-                  onChange={(e) => setAdminLinkAlias(e.target.value)} 
-                  placeholder={lang === 'vi' ? 'Bỏ trống để tự tạo mã' : 'Leave blank to auto-generate'} 
+                <input
+                  type="text"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminLinkAlias}
+                  onChange={(e) => setAdminLinkAlias(e.target.value)}
+                  placeholder={lang === 'vi' ? 'Bỏ trống để tự tạo mã' : 'Leave blank to auto-generate'}
                 />
               </div>
-              
+
               {!adminEditingLink && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Email người sở hữu (Bỏ trống = Hệ thống)' : 'Owner Email (Blank = System)'}</label>
-                  <input 
-                    type="email" 
-                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                    value={adminLinkOwnerEmail} 
-                    onChange={(e) => setAdminLinkOwnerEmail(e.target.value)} 
-                    placeholder="user@example.com" 
+                  <input
+                    type="email"
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                    value={adminLinkOwnerEmail}
+                    onChange={(e) => setAdminLinkOwnerEmail(e.target.value)}
+                    placeholder="user@example.com"
                   />
                 </div>
               )}
@@ -2684,9 +3381,9 @@ export default function App() {
               {adminEditingLink && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Trạng thái hoạt động' : 'Status'}</label>
-                  <select 
-                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none cursor-pointer" 
-                    value={adminLinkStatus} 
+                  <select
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none cursor-pointer"
+                    value={adminLinkStatus}
                     onChange={(e) => setAdminLinkStatus(e.target.value)}
                   >
                     <option value="active">{lang === 'vi' ? 'Đang chạy (Active)' : 'Active'}</option>
@@ -2697,14 +3394,14 @@ export default function App() {
 
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Ngày hết hạn (Không bắt buộc)' : 'Expiration Date (Optional)'}</label>
-                <input 
-                  type="datetime-local" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none font-mono" 
-                  value={adminLinkExpiredAt ? adminLinkExpiredAt.substring(0, 16) : ''} 
-                  onChange={(e) => setAdminLinkExpiredAt(e.target.value)} 
+                <input
+                  type="datetime-local"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none font-mono"
+                  value={adminLinkExpiredAt ? adminLinkExpiredAt.substring(0, 16) : ''}
+                  onChange={(e) => setAdminLinkExpiredAt(e.target.value)}
                 />
               </div>
-              
+
               <div className="flex justify-end gap-2 pt-2 border-t border-[rgba(255,255,255,0.05)]">
                 <button type="button" className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-2 rounded-lg text-xs text-[#a29bfe] cursor-pointer" onClick={() => setIsAdminLinkModalOpen(false)}>
                   {lang === 'vi' ? 'Hủy' : 'Cancel'}
@@ -2729,30 +3426,30 @@ export default function App() {
             <form onSubmit={handleAdminWorkspaceSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Tên nhóm' : 'Workspace Name'}</label>
-                <input 
-                  required 
-                  type="text" 
-                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                  value={adminWorkspaceName} 
-                  onChange={(e) => setAdminWorkspaceName(e.target.value)} 
-                  placeholder={lang === 'vi' ? 'Ví dụ: Phòng Marketing' : 'e.g. Marketing Dept'} 
+                <input
+                  required
+                  type="text"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                  value={adminWorkspaceName}
+                  onChange={(e) => setAdminWorkspaceName(e.target.value)}
+                  placeholder={lang === 'vi' ? 'Ví dụ: Phòng Marketing' : 'e.g. Marketing Dept'}
                 />
               </div>
-              
+
               {!adminEditingWorkspace && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Email Trưởng nhóm (Owner)' : 'Workspace Owner Email'}</label>
-                  <input 
+                  <input
                     required
-                    type="email" 
-                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" 
-                    value={adminWorkspaceOwnerEmail} 
-                    onChange={(e) => setAdminWorkspaceOwnerEmail(e.target.value)} 
-                    placeholder="user@example.com" 
+                    type="email"
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none"
+                    value={adminWorkspaceOwnerEmail}
+                    onChange={(e) => setAdminWorkspaceOwnerEmail(e.target.value)}
+                    placeholder="user@example.com"
                   />
                 </div>
               )}
-              
+
               <div className="flex justify-end gap-2 pt-2 border-t border-[rgba(255,255,255,0.05)]">
                 <button type="button" className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-2 rounded-lg text-xs text-[#a29bfe] cursor-pointer" onClick={() => setIsAdminWorkspaceModalOpen(false)}>
                   {lang === 'vi' ? 'Hủy' : 'Cancel'}
@@ -2805,13 +3502,13 @@ export default function App() {
               <span>👥 {t.membersList} - {selectedWorkspaceName}</span>
               <button className="text-sm font-normal text-[#7a7a9a]" onClick={() => setIsMembersListOpen(false)}>✕</button>
             </h3>
-            
+
             <div className="max-h-[300px] overflow-y-auto space-y-3 mb-4 pr-1">
               {workspaceMembers.map((member, idx) => {
                 const currentWorkspaceRole = workspaces.find(ws => ws.id === selectedWorkspaceId)?.role;
                 const isCurrentUserOwner = currentWorkspaceRole === 'owner';
                 const isMemberOwner = member.role_in_workspace === 'owner';
-                
+
                 return (
                   <div key={idx} className="flex justify-between items-center bg-[#18181f] p-3 rounded-lg border border-[rgba(255,255,255,0.05)]">
                     <div className="flex flex-col gap-0.5 truncate max-w-[200px]">
@@ -2822,19 +3519,19 @@ export default function App() {
                         <div className="text-[9px] font-bold text-[#ff7675] uppercase">{lang === 'vi' ? '👑 Quản trị viên (Owner)' : '👑 Workspace Owner'}</div>
                       )}
                     </div>
-                    
+
                     <div className="flex items-center gap-2">
                       {isCurrentUserOwner && !isMemberOwner ? (
                         <>
-                          <select 
-                            value={member.role_in_workspace} 
+                          <select
+                            value={member.role_in_workspace}
                             onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
                             className="bg-[#111118] border border-[rgba(255,255,255,0.1)] rounded px-1.5 py-0.5 text-[10px] text-white outline-none cursor-pointer"
                           >
                             <option value="editor">Editor</option>
                             <option value="viewer">Viewer</option>
                           </select>
-                          <button 
+                          <button
                             onClick={() => handleDeleteMember(member.user_id)}
                             className="text-[10px] bg-[rgba(255,118,117,0.15)] hover:bg-[rgba(255,118,117,0.3)] text-[#ff7675] px-2 py-0.5 rounded cursor-pointer transition-colors"
                           >
@@ -2854,7 +3551,7 @@ export default function App() {
                 <div className="text-xs italic text-[#7a7a9a] text-center py-4">Chưa có thành viên nào.</div>
               )}
             </div>
-            
+
             <div className="flex justify-end">
               <button className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-1.5 rounded-lg text-xs text-[#a29bfe]" onClick={() => setIsMembersListOpen(false)}>
                 {t.close}

@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, Response, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, Response, BackgroundTasks, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, text
@@ -12,14 +12,36 @@ import jwt
 import csv
 import io
 
+import os
+import geoip2.database
+
 import models, schemas, utils
 from database import engine, get_db, SessionLocal
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
+
+geoip_reader = None
+try:
+    if os.path.exists(DB_PATH):
+        geoip_reader = geoip2.database.Reader(DB_PATH)
+        print("GeoIP database loaded successfully.")
+    else:
+        print(f"GeoIP database not found at: {DB_PATH}")
+except Exception as e:
+    print(f"Error loading GeoIP database: {e}")
+
 
 # Tự động khởi tạo cấu trúc bảng trong cơ sở dữ liệu SQLite nếu chưa có
 models.Base.metadata.create_all(bind=engine)
 for alter_sql in [
     "ALTER TABLE links ADD COLUMN params TEXT",
-    "ALTER TABLE links ADD COLUMN name TEXT"
+    "ALTER TABLE links ADD COLUMN name TEXT",
+    "ALTER TABLE click_logs ADD COLUMN is_bot BOOLEAN DEFAULT 0"
 ]:
     try:
         with engine.connect() as conn:
@@ -47,7 +69,30 @@ try:
 finally:
     db_init.close()
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao", root_path="/slink")
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+def rate_limit_custom_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Bạn đã vượt quá giới hạn yêu cầu. Vui lòng thử lại sau ít phút!"}
+    )
+
+def create_audit_log(db: Session, user_id: Optional[int], action: str, target: str, detail: Optional[str] = None):
+    try:
+        log = models.AuditLog(
+            user_id=user_id,
+            action=action,
+            target=target,
+            detail=detail
+        )
+        db.add(log)
+        db.commit()
+    except Exception as e:
+        print(f"Error creating audit log: {e}")
 
 # --- CẤU HÌNH CỦA CỔNG BẢO MẬT CORS CHUẨN ---
 app.add_middleware(
@@ -108,398 +153,6 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
 def read_root():
     return {"message": "Backend đã sẵn sàng cho các API chức năng!"}
 
-# --- TEMPORARY API FOR DB SEEDING ---
-@app.get("/api/admin/temp-seed-db")
-def temp_seed_db(db: Session = Depends(get_db)):
-    import random
-    from datetime import datetime, timedelta
-    
-    # 1. Find user ID for phun111@gmail.com
-    user = db.query(models.User).filter(models.User.email == 'phun111@gmail.com').first()
-    if not user:
-        hashed_pwd = utils.hash_password("123456")
-        user = models.User(email='phun111@gmail.com', password_hash=hashed_pwd, role="member")
-        if hasattr(models.User, 'username'):
-            setattr(user, 'username', 'phun111')
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    user_id = user.id
-
-    # 2. Update creation date of all links belonging to phun111@gmail.com
-    db.query(models.Link).filter(models.Link.user_id == user_id).update({
-        models.Link.created_at: datetime(2026, 6, 25, 10, 0, 0)
-    })
-    db.commit()
-
-    # 3. Create domains / links if they don't exist
-    # Domain baohn
-    domain = db.query(models.Domain).filter(models.Domain.domain_name == "baohn").first()
-    if not domain:
-        domain = models.Domain(domain_name="baohn", workspace_id=None, created_at=datetime(2026, 6, 25, 10, 0, 0))
-        db.add(domain)
-        db.commit()
-        db.refresh(domain)
-    domain_id = domain.id
-
-    # List of all links we want to manage: short_code, original_url, name, is_new
-    links_info = [
-        {"short_code": "Obr6aK", "url": "https://google.com", "name": "Link Obr6aK", "domain_id": None},
-        {"short_code": "kND4Wr", "url": "https://google.com", "name": "Link kND4Wr", "domain_id": None},
-        {"short_code": "pXTSbx", "url": "https://google.com", "name": "Link pXTSbx", "domain_id": None},
-        {"short_code": "baodulich", "url": "https://baodulich.vn", "name": "Báo Du Lịch", "domain_id": domain_id},
-        {"short_code": "hanoi", "url": "https://hanoi.gov.vn", "name": "Hà Nội", "domain_id": domain_id},
-        {"short_code": "td101", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Trung Đoàn 101", "domain_id": None},
-        {"short_code": "doanh-trai", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Doanh Trại", "domain_id": None},
-        {"short_code": "baobacninh", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Báo Bắc Ninh", "domain_id": None}
-    ]
-
-    link_ids = {}
-    for l_info in links_info:
-        code = l_info["short_code"]
-        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.domain_id == l_info["domain_id"]).first()
-        if not link:
-            link = models.Link(
-                original_url=l_info["url"],
-                short_code=code,
-                domain_id=l_info["domain_id"],
-                workspace_id=None,
-                status="active",
-                password_hash=None,
-                expired_at=None,
-                created_at=datetime(2026, 6, 25, 10, 0, 0),
-                params=None,
-                name=l_info["name"],
-                user_id=user_id
-            )
-            db.add(link)
-            db.commit()
-            db.refresh(link)
-        else:
-            link.user_id = user_id
-            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
-            db.commit()
-        link_ids[code] = link.id
-
-    # 3.b Create workspace 'BaosVNnet' owned by phun111@gmail.com
-    ws_vnnet = db.query(models.Workspace).filter(models.Workspace.name == "BaosVNnet", models.Workspace.created_by == user_id).first()
-    if not ws_vnnet:
-        ws_vnnet = models.Workspace(name="BaosVNnet", created_by=user_id, created_at=datetime(2026, 6, 25, 10, 0, 0))
-        db.add(ws_vnnet)
-        db.commit()
-        db.refresh(ws_vnnet)
-    
-    vnnet_links_info = [
-        {"short_code": "vnn-luattinnguong", "url": "https://vietnamnet.vn/neu-huong-dan-khong-chi-tiet-luat-tin-nguong-ton-giao-kho-di-vao-cuoc-song-2534041.html", "name": "VNN - Luật Tín Ngưỡng Tôn Giáo", "workspace_id": ws_vnnet.id},
-        {"short_code": "vnn-luongthethanh", "url": "https://vietnamnet.vn/luong-the-thanh-thuy-diem-man-nong-tiet-lo-nguyen-tac-hon-nhan-sau-10-nam-2533566.html", "name": "VNN - Lương Thế Thành & Thúy Diễm", "workspace_id": ws_vnnet.id}
-    ]
-
-    for vl in vnnet_links_info:
-        code = vl["short_code"]
-        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.workspace_id == ws_vnnet.id).first()
-        if not link:
-            link = models.Link(
-                original_url=vl["url"],
-                short_code=code,
-                domain_id=None,
-                workspace_id=ws_vnnet.id,
-                status="active",
-                password_hash=None,
-                expired_at=None,
-                created_at=datetime(2026, 6, 25, 10, 0, 0),
-                params=None,
-                name=vl["name"],
-                user_id=user_id
-            )
-            db.add(link)
-            db.commit()
-            db.refresh(link)
-        else:
-            link.user_id = user_id
-            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
-            db.commit()
-        link_ids[code] = link.id
-
-    # 4. Seed data for all these links for days from 2026-06-25 to 2026-07-09.
-    for code, lid in link_ids.items():
-        db.query(models.ClickLog).filter(models.ClickLog.link_id == lid).delete()
-    db.commit()
-
-    start_date = datetime(2026, 6, 25)
-    end_date = datetime(2026, 7, 9)
-    current_day = start_date
-
-    countries = ['Vietnam', 'USA', 'Singapore', 'Korea', 'Japan']
-    country_weights = [0.60, 0.15, 0.10, 0.10, 0.05]
-
-    cities = {
-        'Vietnam': ['Hanoi', 'Ho Chi Minh City', 'Da Nang', 'Can Tho', 'Hai Phong', 'Bac Ninh'],
-        'USA': ['New York', 'San Francisco'],
-        'Singapore': ['Singapore'],
-        'Korea': ['Seoul'],
-        'Japan': ['Tokyo']
-    }
-
-    devices = ['Desktop (Máy tính)', 'Mobile (Điện thoại)', 'Tablet (Máy tính bảng)']
-    device_weights = [0.40, 0.50, 0.10]
-
-    oses = ['Windows', 'macOS', 'Android', 'iOS', 'Linux']
-    os_weights = [0.30, 0.15, 0.35, 0.15, 0.05]
-
-    browsers = ['Chrome', 'Edge', 'Safari', 'Firefox', 'Samsung Browser']
-    browser_weights = [0.50, 0.15, 0.15, 0.10, 0.10]
-
-    sources = ['Direct (Trực tiếp)', 'Zalo', 'YouTube', 'TikTok', 'Facebook', 'Google Search']
-    source_weights = [0.30, 0.20, 0.10, 0.15, 0.20, 0.05]
-
-    referers = {
-        'Facebook': 'https://m.facebook.com/',
-        'Google Search': 'https://www.google.com/',
-        'TikTok': 'https://www.tiktok.com/',
-        'YouTube': 'https://www.youtube.com/',
-        'Zalo': 'https://zalo.me/'
-    }
-
-    total_inserted = 0
-
-    while current_day <= end_date:
-        for code, lid in link_ids.items():
-            if random.random() < 0.20:
-                continue
-            clicks = random.randint(5, 30)
-
-            for _ in range(clicks):
-                hour = random.randint(0, 23)
-                minute = random.randint(0, 59)
-                second = random.randint(0, 59)
-                timestamp = current_day.replace(hour=hour, minute=minute, second=second)
-
-                country = random.choices(countries, weights=country_weights)[0]
-                city = random.choice(cities[country])
-                device = random.choices(devices, weights=device_weights)[0]
-                os_val = random.choices(oses, weights=os_weights)[0]
-                browser = random.choices(browsers, weights=browser_weights)[0]
-                source = random.choices(sources, weights=source_weights)[0]
-                referer = referers.get(source, None)
-                ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-
-                new_log = models.ClickLog(
-                    link_id=lid,
-                    ip_address=ip,
-                    country=country,
-                    city=city,
-                    device_type=device,
-                    os=os_val,
-                    browser=browser,
-                    traffic_source=source,
-                    referer=referer,
-                    created_at=timestamp
-                )
-                db.add(new_log)
-                total_inserted += 1
-
-        current_day += timedelta(days=1)
-
-    db.commit()
-
-    # ==========================================
-    # SEEDING FOR NEW TEST ACCOUNT (testuser@gmail.com)
-    # ==========================================
-    # 1. Create testuser@gmail.com
-    test_email = 'testuser@gmail.com'
-    test_user = db.query(models.User).filter(models.User.email == test_email).first()
-    if not test_user:
-        hashed_pwd = utils.hash_password("123456")
-        test_user = models.User(email=test_email, password_hash=hashed_pwd, role="member")
-        if hasattr(models.User, 'username'):
-            setattr(test_user, 'username', 'testuser')
-        db.add(test_user)
-        db.commit()
-        db.refresh(test_user)
-    else:
-        # Reset password to 123456
-        test_user.password_hash = utils.hash_password("123456")
-        db.commit()
-    
-    # 2. Create member1@gmail.com and member2@gmail.com
-    m1_email = 'member1@gmail.com'
-    m1_user = db.query(models.User).filter(models.User.email == m1_email).first()
-    if not m1_user:
-        m1_user = models.User(email=m1_email, password_hash=utils.hash_password("123456"), role="member")
-        if hasattr(models.User, 'username'):
-            setattr(m1_user, 'username', 'member1')
-        db.add(m1_user)
-    else:
-        m1_user.password_hash = utils.hash_password("123456")
-
-    m2_email = 'member2@gmail.com'
-    m2_user = db.query(models.User).filter(models.User.email == m2_email).first()
-    if not m2_user:
-        m2_user = models.User(email=m2_email, password_hash=utils.hash_password("123456"), role="member")
-        if hasattr(models.User, 'username'):
-            setattr(m2_user, 'username', 'member2')
-        db.add(m2_user)
-    else:
-        m2_user.password_hash = utils.hash_password("123456")
-    db.commit()
-    db.refresh(m1_user)
-    db.refresh(m2_user)
-
-    # 3. Create workspace owned by testuser@gmail.com
-    ws_name = "Nhóm Tin Tức Hà Nội"
-    workspace = db.query(models.Workspace).filter(models.Workspace.name == ws_name, models.Workspace.created_by == test_user.id).first()
-    if not workspace:
-        workspace = models.Workspace(name=ws_name, created_by=test_user.id, created_at=datetime(2026, 6, 25, 10, 0, 0))
-        db.add(workspace)
-        db.commit()
-        db.refresh(workspace)
-    
-    # Add members to workspace
-    m1_member = db.query(models.WorkspaceMember).filter(
-        models.WorkspaceMember.workspace_id == workspace.id,
-        models.WorkspaceMember.user_id == m1_user.id
-    ).first()
-    if not m1_member:
-        m1_member = models.WorkspaceMember(workspace_id=workspace.id, user_id=m1_user.id, role_in_workspace="editor")
-        db.add(m1_member)
-    
-    m2_member = db.query(models.WorkspaceMember).filter(
-        models.WorkspaceMember.workspace_id == workspace.id,
-        models.WorkspaceMember.user_id == m2_user.id
-    ).first()
-    if not m2_member:
-        m2_member = models.WorkspaceMember(workspace_id=workspace.id, user_id=m2_user.id, role_in_workspace="viewer")
-        db.add(m2_member)
-    db.commit()
-
-    # 4. Create links for testuser@gmail.com inside workspace
-    test_links_info = [
-        {"short_code": "hn-express", "url": "https://vnexpress.net", "name": "VnExpress Hà Nội", "workspace_id": workspace.id},
-        {"short_code": "hn-travel", "url": "https://vietnamtourism.gov.vn", "name": "Du Lịch Hà Nội", "workspace_id": workspace.id},
-        {"short_code": "hn-weather", "url": "https://nchmf.gov.vn", "name": "Thời Tiết Hà Nội", "workspace_id": workspace.id},
-        {"short_code": "hn-food", "url": "https://foody.vn", "name": "Ẩm Thực Hà Nội", "workspace_id": workspace.id},
-        {"short_code": "td101-bbn", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Báo Bắc Ninh - Trung Đoàn 101", "workspace_id": workspace.id},
-        {"short_code": "nhandan-vungcam", "url": "https://nhandan.vn/bao-dam-su-nghiem-minh-cua-phap-luat-khong-co-vung-cam-khong-co-ngoai-le-post974494.html", "name": "Báo Nhân Dân - Không Vùng Cấm", "workspace_id": workspace.id},
-        {"short_code": "baocamau-dansinh", "url": "https://baocamau.vn/nhieu-kien-nghi-dan-sinh-duoc-cu-tri-gui-den-dai-bieu-hdnd-tinh-a130464.html", "name": "Báo Cà Mau - Kiến Nghị Dân Sinh", "workspace_id": workspace.id},
-        {"short_code": "hanoimoi-dulich", "url": "https://hanoimoi.vn/du-lich", "name": "Hà Nội Mới - Du Lịch", "workspace_id": workspace.id}
-    ]
-
-    test_link_ids = {}
-    for tl in test_links_info:
-        code = tl["short_code"]
-        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.workspace_id == workspace.id).first()
-        if not link:
-            link = models.Link(
-                original_url=tl["url"],
-                short_code=code,
-                domain_id=None,
-                workspace_id=workspace.id,
-                status="active",
-                password_hash=None,
-                expired_at=None,
-                created_at=datetime(2026, 6, 25, 10, 0, 0),
-                params=None,
-                name=tl["name"],
-                user_id=test_user.id
-            )
-            db.add(link)
-            db.commit()
-            db.refresh(link)
-        else:
-            link.user_id = test_user.id
-            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
-            db.commit()
-        test_link_ids[code] = link.id
-
-    # 5. Delete and seed click logs for test links
-    for code, lid in test_link_ids.items():
-        db.query(models.ClickLog).filter(models.ClickLog.link_id == lid).delete()
-    db.commit()
-
-    current_day = start_date
-    test_total_inserted = 0
-    while current_day <= end_date:
-        for code, lid in test_link_ids.items():
-            if random.random() < 0.20:
-                continue
-            clicks = random.randint(5, 30)
-
-            for _ in range(clicks):
-                hour = random.randint(0, 23)
-                minute = random.randint(0, 59)
-                second = random.randint(0, 59)
-                timestamp = current_day.replace(hour=hour, minute=minute, second=second)
-
-                country = random.choices(countries, weights=country_weights)[0]
-                city = random.choice(cities[country])
-                device = random.choices(devices, weights=device_weights)[0]
-                os_val = random.choices(oses, weights=os_weights)[0]
-                browser = random.choices(browsers, weights=browser_weights)[0]
-                source = random.choices(sources, weights=source_weights)[0]
-                referer = referers.get(source, None)
-                ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-
-                new_log = models.ClickLog(
-                    link_id=lid,
-                    ip_address=ip,
-                    country=country,
-                    city=city,
-                    device_type=device,
-                    os=os_val,
-                    browser=browser,
-                    traffic_source=source,
-                    referer=referer,
-                    created_at=timestamp
-                )
-                db.add(new_log)
-                test_total_inserted += 1
-
-        current_day += timedelta(days=1)
-    
-    db.commit()
-
-    # ==========================================
-    # SEEDING FOR ADMIN ACCOUNTS
-    # ==========================================
-    # Update admin@gmail.com to be an admin with password 123456
-    admin1 = db.query(models.User).filter(models.User.email == 'admin@gmail.com').first()
-    if admin1:
-        admin1.role = 'admin'
-        admin1.password_hash = utils.hash_password("123456")
-    else:
-        admin1 = models.User(email='admin@gmail.com', password_hash=utils.hash_password("123456"), role='admin')
-        if hasattr(models.User, 'username'):
-            setattr(admin1, 'username', 'admin')
-        db.add(admin1)
-    
-    # Create admintest@gmail.com as an admin with password 123456
-    admin2 = db.query(models.User).filter(models.User.email == 'admintest@gmail.com').first()
-    if not admin2:
-        admin2 = models.User(email='admintest@gmail.com', password_hash=utils.hash_password("123456"), role='admin')
-        if hasattr(models.User, 'username'):
-            setattr(admin2, 'username', 'admintest')
-        db.add(admin2)
-    else:
-        admin2.role = 'admin'
-        admin2.password_hash = utils.hash_password("123456")
-    db.commit()
-
-    return {
-        "status": "success",
-        "message": f"Database seeded! Clicks added: {total_inserted} for phun111, {test_total_inserted} for testuser.",
-        "test_user": {
-            "email": test_email,
-            "password": "123456",
-            "workspace": ws_name,
-            "members": [m1_email, m2_email],
-            "links": list(test_link_ids.keys())
-        },
-        "admin_users": [
-            {"email": "admin@gmail.com", "password": "123456", "role": "admin"},
-            {"email": "admintest@gmail.com", "password": "123456", "role": "admin"}
-        ]
-    }
-
 # --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
@@ -530,7 +183,8 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
 
 # --- API ĐĂNG NHẬP (Fix ATTRIBUTE) ---
 @app.post("/api/auth/token")
-def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     username_clean = username.strip().lower()
     # Tìm kiếm linh hoạt: nếu model có `username` thì dò cả `username` hoặc `email`.
     # Nếu model không có `username`, dò theo `email`.
@@ -677,7 +331,8 @@ def reset_password(payload: schemas.ResetPassword, db: Session = Depends(get_db)
 
 # --- API TẠO ĐƯỜNG DẪN RÚT GỌN MỚI ---
 @app.post("/api/shorten")
-def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.User] = Depends(get_current_user_optional), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def shorten_url(request: Request, payload: schemas.ShortenRequest, current_user: Optional[models.User] = Depends(get_current_user_optional), db: Session = Depends(get_db)):
     if payload.alias:
         existing = db.query(models.Link).filter(models.Link.short_code == payload.alias).first()
         if existing:
@@ -696,6 +351,18 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
         selected_domain = db.query(models.Domain).filter(models.Domain.id == payload.domain_id).first()
         if not selected_domain:
             raise HTTPException(status_code=404, detail="Domain tùy chỉnh không tồn tại!")
+        
+        # Kiểm tra xem domain có thuộc workspace của user không
+        if selected_domain.workspace_id is not None:
+            if not current_user:
+                raise HTTPException(status_code=403, detail="Tên miền thuộc một không gian làm việc khác!")
+            is_member = db.query(models.WorkspaceMember).filter(
+                models.WorkspaceMember.workspace_id == selected_domain.workspace_id,
+                models.WorkspaceMember.user_id == current_user.id
+            ).first()
+            if not is_member:
+                raise HTTPException(status_code=403, detail="Tên miền thuộc một không gian làm việc khác bạn không được phép dùng!")
+                
         domain_id = selected_domain.id
         final_domain_name = selected_domain.domain_name
     elif getattr(payload, 'domain', None):
@@ -705,7 +372,18 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
         domain_name = domain_name.rstrip("/")
         if domain_name:
             selected_domain = db.query(models.Domain).filter(models.Domain.domain_name == domain_name).first()
-            if not selected_domain:
+            if selected_domain:
+                # Kiểm tra xem domain có thuộc workspace của user không
+                if selected_domain.workspace_id is not None:
+                    if not current_user:
+                        raise HTTPException(status_code=403, detail="Tên miền thuộc một không gian làm việc khác!")
+                    is_member = db.query(models.WorkspaceMember).filter(
+                        models.WorkspaceMember.workspace_id == selected_domain.workspace_id,
+                        models.WorkspaceMember.user_id == current_user.id
+                    ).first()
+                    if not is_member:
+                        raise HTTPException(status_code=403, detail="Tên miền thuộc một không gian làm việc khác bạn không được phép dùng!")
+            else:
                 selected_domain = models.Domain(domain_name=domain_name, workspace_id=payload.workspace_id if getattr(payload, 'workspace_id', None) else None)
                 db.add(selected_domain)
                 db.commit()
@@ -737,6 +415,10 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
     db.commit()
     db.refresh(new_link)
 
+    # Ghi Audit Log
+    if current_user:
+        create_audit_log(db, current_user.id, "create_link", short_code, f"Tạo liên kết rút gọn cho {new_link.original_url}")
+
     short_url = f"https://{final_domain_name}/{short_code}" if final_domain_name else f"http://localhost:8000/{short_code}"
     return {
         "status": "success",
@@ -748,13 +430,47 @@ def shorten_url(payload: schemas.ShortenRequest, current_user: Optional[models.U
 
 # --- API TỰ ĐỘNG XUẤX FILE ẢNH QR CODE ĐỘNG ---
 @app.get("/api/qrcode/{short_code}")
-def get_qr_code(short_code: str, db: Session = Depends(get_db)):
+def get_qr_code(
+    short_code: str,
+    fill_color: str = "black",
+    back_color: str = "white",
+    format: str = "png",
+    db: Session = Depends(get_db)
+):
     link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
     if not link:
         raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn tương ứng để tạo QR!")
         
-    qr_stream = utils.generate_qrcode_stream(short_code)
-    return StreamingResponse(qr_stream, media_type="image/png")
+    qr_stream = utils.generate_qrcode_stream(short_code, fill_color=fill_color, back_color=back_color, format=format)
+    media_type = "image/svg+xml" if format.lower() == "svg" else "image/png"
+    return StreamingResponse(qr_stream, media_type=media_type)
+
+@app.post("/api/qrcode/{short_code}/custom")
+async def customize_qr_code(
+    short_code: str,
+    fill_color: str = Form("black"),
+    back_color: str = Form("white"),
+    logo: Optional[UploadFile] = File(None),
+    format: str = Form("png"),
+    db: Session = Depends(get_db)
+):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn tương ứng để tạo QR!")
+        
+    logo_bytes = None
+    if logo and logo.filename:
+        logo_bytes = await logo.read()
+        
+    qr_stream = utils.generate_qrcode_stream(
+        short_code, 
+        fill_color=fill_color, 
+        back_color=back_color, 
+        logo_bytes=logo_bytes,
+        format=format
+    )
+    media_type = "image/svg+xml" if format.lower() == "svg" else "image/png"
+    return StreamingResponse(qr_stream, media_type=media_type)
 
 # --- API ĐIỀU HƯỚNG LINK & QUÉT ANALYTICS NGẦM ---
 def get_password_prompt_html(short_code: str, error: Optional[str] = None) -> str:
@@ -896,6 +612,7 @@ def perform_tracking_and_redirect(link: models.Link, request: Request, db: Sessi
     ip_address = request.client.host if request.client else "127.0.0.1"
     user_agent_string = request.headers.get("user-agent", "")
     user_agent = parse(user_agent_string)
+    is_bot = getattr(user_agent, "is_bot", False)
     
     if user_agent.is_mobile:
         device_type = "Mobile (Điện thoại)"
@@ -906,6 +623,16 @@ def perform_tracking_and_redirect(link: models.Link, request: Request, db: Sessi
 
     os_name = user_agent.os.family       
     browser_name = user_agent.browser.family 
+
+    country = "Unknown"
+    city = "Unknown"
+    if geoip_reader and ip_address and ip_address not in ("127.0.0.1", "::1", "localhost"):
+        try:
+            response = geoip_reader.city(ip_address)
+            country = response.country.name or "Unknown"
+            city = response.city.name or "Unknown"
+        except Exception:
+            pass
 
     referer = request.headers.get("referer", "")
     traffic_source = "Direct (Trực tiếp / Gõ URL)"
@@ -940,11 +667,14 @@ def perform_tracking_and_redirect(link: models.Link, request: Request, db: Sessi
     new_log = models.ClickLog(
         link_id=link.id,
         ip_address=ip_address,
+        country=country,
+        city=city,
         device_type=device_type,
         os=os_name,
         browser=browser_name,
         traffic_source=traffic_source,
-        referer=referer if referer else None
+        referer=referer if referer else None,
+        is_bot=is_bot
     )
     db.add(new_log)
     db.commit()
@@ -962,7 +692,8 @@ def perform_tracking_and_redirect(link: models.Link, request: Request, db: Sessi
 
 # --- API ĐIỀU HƯỚNG LINK & QUÉT ANALYTICS NGẦM ---
 @app.get("/{short_code}")
-def redirect_and_track(short_code: str, request: Request, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def redirect_and_track(short_code: str, request: Request, pwd: Optional[str] = None, db: Session = Depends(get_db)):
     link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
     if not link:
         raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
@@ -971,7 +702,9 @@ def redirect_and_track(short_code: str, request: Request, db: Session = Depends(
         raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
 
     if link.password_hash:
-        return HTMLResponse(content=get_password_prompt_html(short_code), status_code=200)
+        password_attempt = pwd or request.headers.get("X-Link-Password")
+        if not password_attempt or not utils.verify_password(password_attempt.strip(), link.password_hash):
+            return HTMLResponse(content=get_password_prompt_html(short_code), status_code=200)
 
     return perform_tracking_and_redirect(link, request, db)
 
@@ -1000,6 +733,8 @@ def get_link_analytics(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     workspace_id: Optional[int] = None,
+    device_type: Optional[str] = None,
+    exclude_bots: bool = True,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1037,6 +772,24 @@ def get_link_analytics(
             if not is_member:
                 raise HTTPException(status_code=403, detail="Từ chối truy cập không gian!")
             links = db.query(models.Link).filter(models.Link.workspace_id == workspace_id).all()
+            
+            # Lọc phân quyền nếu không phải chủ sở hữu workspace
+            if is_member.role_in_workspace != "owner":
+                user_memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user.id).all()
+                user_ws_ids = [m.workspace_id for m in user_memberships]
+                allowed_permissions = db.query(models.LinkPermission).filter(
+                    models.LinkPermission.workspace_id.in_(user_ws_ids),
+                    models.LinkPermission.permission.in_(["view_analytics", "manage"])
+                ).all()
+                allowed_link_ids = {p.link_id for p in allowed_permissions}
+                
+                hidden_permissions = db.query(models.LinkPermission).filter(
+                    models.LinkPermission.workspace_id.in_(user_ws_ids),
+                    models.LinkPermission.permission == "hide_analytics"
+                ).all()
+                hidden_link_ids = {p.link_id for p in hidden_permissions}
+                
+                links = [l for l in links if l.id in allowed_link_ids and l.id not in hidden_link_ids]
         else:
             links = db.query(models.Link).filter(
                 models.Link.user_id == current_user.id,
@@ -1049,16 +802,53 @@ def get_link_analytics(
             raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn để xem thống kê!")
         
         # Kiểm tra quyền xem link này
+        has_access = False
         if link.workspace_id:
-            is_member = db.query(models.WorkspaceMember).filter(
+            # 1. Chủ sở hữu workspace
+            is_ws_owner = db.query(models.WorkspaceMember).filter(
                 models.WorkspaceMember.workspace_id == link.workspace_id,
-                models.WorkspaceMember.user_id == current_user.id
+                models.WorkspaceMember.user_id == current_user.id,
+                models.WorkspaceMember.role_in_workspace == "owner"
             ).first()
-            if not is_member:
-                raise HTTPException(status_code=403, detail="Từ chối truy cập thống kê link này!")
+            if is_ws_owner:
+                has_access = True
+            else:
+                # 2. Workspace member chi tiết phân quyền
+                user_memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user.id).all()
+                user_ws_ids = [m.workspace_id for m in user_memberships]
+                
+                permissions = db.query(models.LinkPermission).filter(
+                    models.LinkPermission.link_id == link.id,
+                    models.LinkPermission.workspace_id.in_(user_ws_ids)
+                ).all()
+                perm_values = [p.permission for p in permissions]
+                
+                if "manage" in perm_values or "view_analytics" in perm_values:
+                    has_access = True
+                elif "hide_analytics" in perm_values:
+                    raise HTTPException(status_code=403, detail="Bạn không có quyền xem analytics link này")
+                else:
+                    raise HTTPException(status_code=403, detail="Bạn không có quyền xem analytics link này")
         else:
-            if link.user_id != current_user.id:
-                raise HTTPException(status_code=403, detail="Từ chối truy cập thống kê link này!")
+            if link.user_id == current_user.id:
+                has_access = True
+            else:
+                # Share cho workspace khác
+                user_memberships = db.query(models.WorkspaceMember).filter(models.WorkspaceMember.user_id == current_user.id).all()
+                user_ws_ids = [m.workspace_id for m in user_memberships]
+                permissions = db.query(models.LinkPermission).filter(
+                    models.LinkPermission.link_id == link.id,
+                    models.LinkPermission.workspace_id.in_(user_ws_ids)
+                ).all()
+                perm_values = [p.permission for p in permissions]
+                if "manage" in perm_values or "view_analytics" in perm_values:
+                    has_access = True
+                else:
+                    raise HTTPException(status_code=403, detail="Bạn không có quyền xem analytics link này")
+
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Bạn không có quyền xem analytics link này")
+            
         link_ids = [link.id]
 
     if not link_ids:
@@ -1070,24 +860,39 @@ def get_link_analytics(
                 "original_url": ""
             },
             "summary": {
-                "total_clicks": 0
+                "total_clicks": 0,
+                "unique_clicks": 0,
+                "peak_hour": -1,
+                "click_trend": []
             },
             "charts": {
                 "devices": {},
                 "operating_systems": {},
                 "browsers": {},
                 "traffic_sources": {},
-                "clicks_over_time": {}
+                "clicks_over_time": {},
+                "top_countries": {},
+                "top_cities": {}
             },
-            "click_rows": []
+            "click_rows": [],
+            "edit_history": []
         }
 
     # Truy vấn dữ liệu click logs
     query = db.query(models.ClickLog).filter(models.ClickLog.link_id.in_(link_ids))
+    if exclude_bots:
+        query = query.filter(models.ClickLog.is_bot == False)
     if filter_start:
         query = query.filter(models.ClickLog.created_at >= filter_start)
     if filter_end:
         query = query.filter(models.ClickLog.created_at <= filter_end)
+    if device_type and device_type.lower() != "all":
+        if device_type.lower() == "mobile":
+            query = query.filter(models.ClickLog.device_type.like("%Mobile%"))
+        elif device_type.lower() == "desktop":
+            query = query.filter(models.ClickLog.device_type.like("%Desktop%"))
+        elif device_type.lower() == "tablet":
+            query = query.filter(models.ClickLog.device_type.like("%Tablet%"))
         
     click_logs = query.order_by(models.ClickLog.created_at.desc()).all()
     total_clicks = len(click_logs)
@@ -1098,6 +903,11 @@ def get_link_analytics(
     browser_stats = {}
     source_stats = {}
     clicks_over_time = {}
+    
+    country_counts = {}
+    city_counts = {}
+    hour_counts = {}
+    unique_ips = set()
 
     for click in click_logs:
         device = click.device_type or "Unknown"
@@ -1115,8 +925,42 @@ def get_link_analytics(
         if click.created_at:
             date_str = click.created_at.strftime("%Y-%m-%d")
             clicks_over_time[date_str] = clicks_over_time.get(date_str, 0) + 1
+            
+            # Thống kê giờ trong ngày
+            h = click.created_at.hour
+            hour_counts[h] = hour_counts.get(h, 0) + 1
+            
+        # Thống kê Quốc gia / Thành phố / IP
+        country = click.country or "Unknown"
+        country_counts[country] = country_counts.get(country, 0) + 1
+        
+        city = click.city or "Unknown"
+        city_counts[city] = city_counts.get(city, 0) + 1
+        
+        if click.ip_address:
+            unique_ips.add(click.ip_address)
 
     sorted_clicks_over_time = dict(sorted(clicks_over_time.items()))
+    top_countries = dict(sorted(country_counts.items(), key=lambda x: x[1], reverse=True)[:5])
+    top_cities = dict(sorted(city_counts.items(), key=lambda x: x[1], reverse=True)[:5])
+    unique_clicks = len(unique_ips)
+    peak_hour = max(hour_counts.items(), key=lambda x: x[1])[0] if hour_counts else -1
+
+    # Xu hướng lượt click trong 24h qua
+    now_utc = datetime.utcnow()
+    start_hour = (now_utc - timedelta(hours=23)).replace(minute=0, second=0, microsecond=0)
+    
+    trend_slots = {start_hour + timedelta(hours=i): 0 for i in range(24)}
+    for click in click_logs:
+        if click.created_at and click.created_at >= start_hour:
+            click_hour = click.created_at.replace(minute=0, second=0, microsecond=0)
+            if click_hour in trend_slots:
+                trend_slots[click_hour] += 1
+                
+    click_trend = [
+        {"hour": slot.strftime("%H:00"), "clicks": trend_slots[slot]}
+        for slot in sorted(trend_slots.keys())
+    ]
 
     click_rows = [
         {
@@ -1157,18 +1001,69 @@ def get_link_analytics(
             "original_url": original_url
         },
         "summary": {
-            "total_clicks": total_clicks
+            "total_clicks": total_clicks,
+            "unique_clicks": unique_clicks,
+            "peak_hour": peak_hour,
+            "click_trend": click_trend
         },
         "charts": {
             "devices": device_stats,
             "operating_systems": os_stats,
             "browsers": browser_stats,
             "traffic_sources": source_stats,
-            "clicks_over_time": sorted_clicks_over_time
+            "clicks_over_time": sorted_clicks_over_time,
+            "top_countries": top_countries,
+            "top_cities": top_cities
         },
         "click_rows": click_rows,
         "edit_history": edit_history_list
     }
+
+@app.get("/api/analytics/compare")
+def compare_link_analytics(
+    codes: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    if not code_list:
+        raise HTTPException(status_code=400, detail="Mã so sánh không hợp lệ.")
+        
+    results = []
+    for code in code_list:
+        link = db.query(models.Link).filter(models.Link.short_code == code).first()
+        if not link:
+            results.append({
+                "short_code": code,
+                "exists": False,
+                "total_clicks": 0,
+                "unique_clicks": 0
+            })
+            continue
+            
+        # Kiểm tra quyền xem thống kê link này
+        if link.workspace_id:
+            is_member = db.query(models.WorkspaceMember).filter(
+                models.WorkspaceMember.workspace_id == link.workspace_id,
+                models.WorkspaceMember.user_id == current_user.id
+            ).first()
+            if not is_member:
+                raise HTTPException(status_code=403, detail=f"Không có quyền xem thống kê cho link /{code}")
+        else:
+            if link.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail=f"Không có quyền xem thống kê cho link /{code}")
+                
+        total_clicks = db.query(func.count(models.ClickLog.id)).filter(models.ClickLog.link_id == link.id).scalar() or 0
+        unique_clicks = db.query(func.count(models.ClickLog.ip_address.distinct())).filter(models.ClickLog.link_id == link.id).scalar() or 0
+        
+        results.append({
+            "short_code": code,
+            "exists": True,
+            "total_clicks": total_clicks,
+            "unique_clicks": unique_clicks
+        })
+        
+    return results
 
 @app.get("/api/analytics/{short_code}/export")
 def export_link_clicks(short_code: str, db: Session = Depends(get_db)):
@@ -1247,6 +1142,7 @@ def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_u
     new_member = models.WorkspaceMember(workspace_id=workspace_id, user_id=invited_user.id, role_in_workspace=payload.role_in_workspace)
     db.add(new_member)
     db.commit()
+    create_audit_log(db, current_user.id, "invite_member", str(workspace_id), f"Mời thành viên {payload.email} vai trò {payload.role_in_workspace}")
     return {"status": "success", "message": "Mời thành viên tham gia nhóm thành công!"}
 
 @app.get("/api/workspaces/{workspace_id}/links")
@@ -1428,6 +1324,7 @@ def update_link(short_code: str, payload: schemas.LinkUpdate, current_user: mode
 
     db.commit()
     db.refresh(link)
+    create_audit_log(db, current_user.id, "update_link", short_code, "Cập nhật thông tin link (expired_at, status, name)")
     return {
         "status": "success",
         "message": "Cập nhật liên kết thành công!",
@@ -1460,6 +1357,7 @@ def toggle_link_status(short_code: str, current_user: models.User = Depends(get_
         message = "Đã kích hoạt liên kết hoạt động!"
 
     db.commit()
+    create_audit_log(db, current_user.id, "update_link", short_code, f"Chuyển trạng thái link sang {link.status}")
     return {"status": "success", "message": message, "new_status": link.status}
 
 @app.delete("/api/links/{short_code}")
@@ -1491,6 +1389,7 @@ def delete_link(short_code: str, force: bool = False, current_user: models.User 
     # Xóa
     db.delete(link)
     db.commit()
+    create_audit_log(db, current_user.id, "update_link", short_code, f"Xóa link (alias: {short_code})")
     return {"status": "success", "message": "Xóa liên kết rút gọn thành công!"}
 
 # --- API QUÉT CẢNH BÁO TRAFFIC BẤT THƯỜNG (ANOMALY DETECTION - Fix ATTRIBUTE) ---
@@ -1528,9 +1427,13 @@ def get_dashboard_analytics(
     range_type: str = "all", # today, month, year, custom
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    device_type: Optional[str] = None,
+    exclude_bots: bool = True,
     db: Session = Depends(get_db)
 ):
     query = db.query(models.ClickLog)
+    if exclude_bots:
+        query = query.filter(models.ClickLog.is_bot == False)
     
     if link_id:
         query = query.filter(models.ClickLog.link_id == link_id)
@@ -1553,7 +1456,28 @@ def get_dashboard_analytics(
         except ValueError:
             raise HTTPException(status_code=400, detail="Định dạng ngày không hợp lệ")
 
+    if device_type and device_type.lower() != "all":
+        if device_type.lower() == "mobile":
+            query = query.filter(models.ClickLog.device_type.like("%Mobile%"))
+        elif device_type.lower() == "desktop":
+            query = query.filter(models.ClickLog.device_type.like("%Desktop%"))
+        elif device_type.lower() == "tablet":
+            query = query.filter(models.ClickLog.device_type.like("%Tablet%"))
+
     total_clicks = query.count()
+    
+    # Thống kê unique clicks sử dụng DISTINCT IP
+    unique_clicks = db.query(func.count(models.ClickLog.ip_address.distinct())) \
+                      .filter(models.ClickLog.id.in_(query.with_entities(models.ClickLog.id))) \
+                      .scalar() or 0
+
+    # Thống kê top 5 quốc gia
+    country_query = db.query(models.ClickLog.country, func.count(models.ClickLog.id).label('clicks')) \
+                      .filter(models.ClickLog.id.in_(query.with_entities(models.ClickLog.id))) \
+                      .group_by(models.ClickLog.country) \
+                      .order_by(text('clicks DESC')) \
+                      .limit(5).all()
+    top_countries = {item.country or "Unknown": item.clicks for item in country_query}
     
     # Thống kê theo ngày để vẽ biểu đồ xu hướng
     trend_stats = db.query(
@@ -1565,6 +1489,8 @@ def get_dashboard_analytics(
     return {
         "status": "success",
         "total_clicks": total_clicks,
+        "unique_clicks": unique_clicks,
+        "top_countries": top_countries,
         "trend": [{"date": item.day, "clicks": item.count} for item in trend_stats]
     }
 
@@ -1798,3 +1724,182 @@ def admin_delete_workspace(workspace_id: int, current_user: models.User = Depend
     db.delete(ws)
     db.commit()
     return {"status": "success", "message": "Xóa nhóm thành công!"}
+
+# --- THÊM CÁC ENDPOINT MỚI ---
+
+@app.post("/api/links/{short_code}/permissions")
+def create_link_permission(
+    short_code: str,
+    payload: schemas.LinkPermissionCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy link!")
+        
+    if link.workspace_id:
+        is_owner = db.query(models.WorkspaceMember).filter(
+            models.WorkspaceMember.workspace_id == link.workspace_id,
+            models.WorkspaceMember.user_id == current_user.id,
+            models.WorkspaceMember.role_in_workspace == "owner"
+        ).first()
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Chỉ owner của workspace mới có quyền phân quyền link này!")
+    else:
+        if link.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Chỉ chủ sở hữu link mới có quyền phân quyền!")
+            
+    target_ws = db.query(models.Workspace).filter(models.Workspace.id == payload.workspace_id).first()
+    if not target_ws:
+        raise HTTPException(status_code=404, detail="Không tìm thấy workspace mục tiêu!")
+        
+    existing = db.query(models.LinkPermission).filter(
+        models.LinkPermission.link_id == link.id,
+        models.LinkPermission.workspace_id == payload.workspace_id
+    ).first()
+    if existing:
+        existing.permission = payload.permission
+        db.commit()
+        db.refresh(existing)
+        create_audit_log(db, current_user.id, "update_permission", short_code, f"Cập nhật quyền cho nhóm {target_ws.name} thành {payload.permission}")
+        return {"status": "success", "message": "Cập nhật quyền thành công!"}
+        
+    new_perm = models.LinkPermission(
+        link_id=link.id,
+        workspace_id=payload.workspace_id,
+        permission=payload.permission
+    )
+    db.add(new_perm)
+    db.commit()
+    create_audit_log(db, current_user.id, "update_permission", short_code, f"Gán quyền cho nhóm {target_ws.name}: {payload.permission}")
+    return {"status": "success", "message": "Gán quyền thành công!"}
+
+@app.get("/api/links/{short_code}/permissions")
+def get_link_permissions(
+    short_code: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy link!")
+        
+    if link.workspace_id:
+        is_member = db.query(models.WorkspaceMember).filter(
+            models.WorkspaceMember.workspace_id == link.workspace_id,
+            models.WorkspaceMember.user_id == current_user.id
+        ).first()
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Từ chối truy cập thông tin quyền!")
+    else:
+        if link.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Từ chối truy cập thông tin quyền!")
+            
+    permissions = db.query(models.LinkPermission).filter(models.LinkPermission.link_id == link.id).all()
+    result = []
+    for perm in permissions:
+        ws = db.query(models.Workspace).filter(models.Workspace.id == perm.workspace_id).first()
+        result.append({
+            "id": perm.id,
+            "workspace_id": perm.workspace_id,
+            "workspace_name": ws.name if ws else "Nhóm đã bị xóa",
+            "permission": perm.permission
+        })
+    return {"status": "success", "permissions": result}
+
+@app.delete("/api/links/{short_code}/permissions/{id}")
+def delete_link_permission(
+    short_code: str,
+    id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Không tìm thấy link!")
+        
+    if link.workspace_id:
+        is_owner = db.query(models.WorkspaceMember).filter(
+            models.WorkspaceMember.workspace_id == link.workspace_id,
+            models.WorkspaceMember.user_id == current_user.id,
+            models.WorkspaceMember.role_in_workspace == "owner"
+        ).first()
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Chỉ owner của workspace mới có quyền quản lý!")
+    else:
+        if link.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Chỉ chủ sở hữu link mới có quyền quản lý!")
+            
+    perm = db.query(models.LinkPermission).filter(models.LinkPermission.id == id, models.LinkPermission.link_id == link.id).first()
+    if not perm:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi phân quyền!")
+        
+    ws = db.query(models.Workspace).filter(models.Workspace.id == perm.workspace_id).first()
+    ws_name = ws.name if ws else f"ID {perm.workspace_id}"
+    db.delete(perm)
+    db.commit()
+    create_audit_log(db, current_user.id, "update_permission", short_code, f"Xóa quyền của nhóm {ws_name}")
+    return {"status": "success", "message": "Xóa quyền thành công!"}
+
+@app.get("/api/links/{short_code}/check-password")
+def check_link_password_requirement(short_code: str, db: Session = Depends(get_db)):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
+    return {
+        "status": "success",
+        "has_password": link.password_hash is not None
+    }
+
+@app.post("/api/links/{short_code}/verify-password")
+def verify_link_password(
+    short_code: str,
+    payload: schemas.LinkPasswordVerify,
+    db: Session = Depends(get_db)
+):
+    link = db.query(models.Link).filter(models.Link.short_code == short_code, models.Link.status == "active").first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Đường dẫn không tồn tại hoặc đã bị tạm dừng!")
+    
+    if not link.password_hash:
+        return {"status": "success", "valid": True}
+        
+    valid = utils.verify_password(payload.password.strip(), link.password_hash)
+    return {"status": "success", "valid": valid}
+
+@app.get("/api/workspaces/{workspace_id}/domains")
+def get_workspace_domains(
+    workspace_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    is_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace_id,
+        models.WorkspaceMember.user_id == current_user.id
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Từ chối truy cập không gian!")
+        
+    domains = db.query(models.Domain).filter(
+        or_(models.Domain.workspace_id == workspace_id, models.Domain.workspace_id == None)
+    ).all()
+    return {"status": "success", "domains": domains}
+
+@app.get("/api/audit-logs")
+def get_audit_logs(
+    limit: int = 50,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    logs = db.query(models.AuditLog).filter(models.AuditLog.user_id == current_user.id).order_by(models.AuditLog.created_at.desc()).limit(limit).all()
+    result = []
+    for log in logs:
+        result.append({
+            "id": log.id,
+            "action": log.action,
+            "target": log.target,
+            "detail": log.detail,
+            "created_at": log.created_at.isoformat() if log.created_at else None
+        })
+    return {"status": "success", "audit_logs": result}

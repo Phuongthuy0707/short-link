@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.sql import func
 from database import Base
 
@@ -66,6 +66,7 @@ class ClickLog(Base):
     browser = Column(String, default="Unknown") # Chrome, Safari
     traffic_source = Column(String, default="Direct (Trực tiếp)") # Facebook, Google, YouTube, Direct
     referer = Column(Text)
+    is_bot = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now()) # Mốc thời gian cốt lõi để làm bộ lọc Ngày/Giờ/Tháng
 
 # Bảng 7: Lưu lịch sử chỉnh sửa thời gian hết hạn của link
@@ -77,3 +78,21 @@ class LinkEditHistory(Base):
     new_expired_at = Column(DateTime, nullable=True)
     edited_at = Column(DateTime, default=func.now())
     edited_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+# Bảng 8: Phân quyền truy cập theo từng Link cho Workspace
+class LinkPermission(Base):
+    __tablename__ = "link_permissions"
+    id = Column(Integer, primary_key=True, index=True)
+    link_id = Column(Integer, ForeignKey("links.id"), nullable=False)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=False)
+    permission = Column(String, nullable=False) # "view_analytics", "hide_analytics", "manage"
+
+# Bảng 9: Nhật ký hệ thống (Audit Log) cho bảo mật
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    action = Column(String, nullable=False) # create_link, update_link, update_permission, invite_member
+    target = Column(String, nullable=True)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
