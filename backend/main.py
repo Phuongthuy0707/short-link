@@ -46,7 +46,8 @@ for alter_sql in [
     try:
         with engine.connect() as conn:
             conn.execute(text(alter_sql))
-    except OperationalError:
+            conn.commit()
+    except Exception:
         pass
 
 # Tự động khởi tạo tài khoản Admin cố định
@@ -65,7 +66,7 @@ try:
             setattr(new_admin, 'username', 'admin_slt')
         db_init.add(new_admin)
         db_init.commit()
-        print("Tài khoản Admin cố định đã được tạo thành công!")
+        print("Tai khoan Admin co dinh da duoc tao thanh cong!")
 finally:
     db_init.close()
 
