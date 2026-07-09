@@ -108,6 +108,160 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
 def read_root():
     return {"message": "Backend đã sẵn sàng cho các API chức năng!"}
 
+# --- TEMPORARY API FOR DB SEEDING ---
+@app.get("/api/admin/temp-seed-db")
+def temp_seed_db(db: Session = Depends(get_db)):
+    import random
+    from datetime import datetime, timedelta
+    
+    # 1. Find user ID for phun111@gmail.com
+    user = db.query(models.User).filter(models.User.email == 'phun111@gmail.com').first()
+    if not user:
+        return {"status": "error", "message": "User 'phun111@gmail.com' not found!"}
+    user_id = user.id
+
+    # 2. Update creation date of all links belonging to phun111@gmail.com
+    db.query(models.Link).filter(models.Link.user_id == user_id).update({
+        models.Link.created_at: datetime(2026, 6, 25, 10, 0, 0)
+    })
+    db.commit()
+
+    # 3. Create domains / links if they don't exist
+    # Domain baohn
+    domain = db.query(models.Domain).filter(models.Domain.domain_name == "baohn").first()
+    if not domain:
+        domain = models.Domain(domain_name="baohn", workspace_id=None, created_at=datetime(2026, 6, 25, 10, 0, 0))
+        db.add(domain)
+        db.commit()
+        db.refresh(domain)
+    domain_id = domain.id
+
+    # List of all links we want to manage: short_code, original_url, name, is_new
+    links_info = [
+        {"short_code": "Obr6aK", "url": "https://google.com", "name": "Link Obr6aK", "domain_id": None},
+        {"short_code": "kND4Wr", "url": "https://google.com", "name": "Link kND4Wr", "domain_id": None},
+        {"short_code": "pXTSbx", "url": "https://google.com", "name": "Link pXTSbx", "domain_id": None},
+        {"short_code": "baodulich", "url": "https://baodulich.vn", "name": "Báo Du Lịch", "domain_id": domain_id},
+        {"short_code": "hanoi", "url": "https://hanoi.gov.vn", "name": "Hà Nội", "domain_id": domain_id},
+        {"short_code": "td101", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Trung Đoàn 101", "domain_id": None},
+        {"short_code": "doanh-trai", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Doanh Trại", "domain_id": None},
+        {"short_code": "baobacninh", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Báo Bắc Ninh", "domain_id": None}
+    ]
+
+    link_ids = {}
+    for l_info in links_info:
+        code = l_info["short_code"]
+        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.domain_id == l_info["domain_id"]).first()
+        if not link:
+            link = models.Link(
+                original_url=l_info["url"],
+                short_code=code,
+                domain_id=l_info["domain_id"],
+                workspace_id=None,
+                status="active",
+                password_hash=None,
+                expired_at=None,
+                created_at=datetime(2026, 6, 25, 10, 0, 0),
+                params=None,
+                name=l_info["name"],
+                user_id=user_id
+            )
+            db.add(link)
+            db.commit()
+            db.refresh(link)
+        else:
+            link.user_id = user_id
+            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
+            db.commit()
+        link_ids[code] = link.id
+
+    # 4. Seed data for all these 8 links for days from 2026-06-25 to 2026-07-09.
+    for code, lid in link_ids.items():
+        db.query(models.ClickLog).filter(models.ClickLog.link_id == lid).delete()
+    db.commit()
+
+    start_date = datetime(2026, 6, 25)
+    end_date = datetime(2026, 7, 9)
+    current_day = start_date
+
+    countries = ['Vietnam', 'USA', 'Singapore', 'Korea', 'Japan']
+    country_weights = [0.60, 0.15, 0.10, 0.10, 0.05]
+
+    cities = {
+        'Vietnam': ['Hanoi', 'Ho Chi Minh City', 'Da Nang', 'Can Tho', 'Hai Phong', 'Bac Ninh'],
+        'USA': ['New York', 'San Francisco'],
+        'Singapore': ['Singapore'],
+        'Korea': ['Seoul'],
+        'Japan': ['Tokyo']
+    }
+
+    devices = ['Desktop (Máy tính)', 'Mobile (Điện thoại)', 'Tablet (Máy tính bảng)']
+    device_weights = [0.40, 0.50, 0.10]
+
+    oses = ['Windows', 'macOS', 'Android', 'iOS', 'Linux']
+    os_weights = [0.30, 0.15, 0.35, 0.15, 0.05]
+
+    browsers = ['Chrome', 'Edge', 'Safari', 'Firefox', 'Samsung Browser']
+    browser_weights = [0.50, 0.15, 0.15, 0.10, 0.10]
+
+    sources = ['Direct (Trực tiếp)', 'Zalo', 'YouTube', 'TikTok', 'Facebook', 'Google Search']
+    source_weights = [0.30, 0.20, 0.10, 0.15, 0.20, 0.05]
+
+    referers = {
+        'Facebook': 'https://m.facebook.com/',
+        'Google Search': 'https://www.google.com/',
+        'TikTok': 'https://www.tiktok.com/',
+        'YouTube': 'https://www.youtube.com/',
+        'Zalo': 'https://zalo.me/'
+    }
+
+    total_inserted = 0
+
+    while current_day <= end_date:
+        for code, lid in link_ids.items():
+            if random.random() < 0.20:
+                continue
+            clicks = random.randint(5, 30)
+
+            for _ in range(clicks):
+                hour = random.randint(0, 23)
+                minute = random.randint(0, 59)
+                second = random.randint(0, 59)
+                timestamp = current_day.replace(hour=hour, minute=minute, second=second)
+
+                country = random.choices(countries, weights=country_weights)[0]
+                city = random.choice(cities[country])
+                device = random.choices(devices, weights=device_weights)[0]
+                os_val = random.choices(oses, weights=os_weights)[0]
+                browser = random.choices(browsers, weights=browser_weights)[0]
+                source = random.choices(sources, weights=source_weights)[0]
+                referer = referers.get(source, None)
+                ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
+                new_log = models.ClickLog(
+                    link_id=lid,
+                    ip_address=ip,
+                    country=country,
+                    city=city,
+                    device_type=device,
+                    os=os_val,
+                    browser=browser,
+                    traffic_source=source,
+                    referer=referer,
+                    created_at=timestamp
+                )
+                db.add(new_log)
+                total_inserted += 1
+
+        current_day += timedelta(days=1)
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"Database seeded successfully! Total click logs created: {total_inserted} across 8 links.",
+        "links": list(link_ids.keys())
+    }
+
 # --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
