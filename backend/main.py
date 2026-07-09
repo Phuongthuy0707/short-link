@@ -181,7 +181,46 @@ def temp_seed_db(db: Session = Depends(get_db)):
             db.commit()
         link_ids[code] = link.id
 
-    # 4. Seed data for all these 8 links for days from 2026-06-25 to 2026-07-09.
+    # 3.b Create workspace 'BaosVNnet' owned by phun111@gmail.com
+    ws_vnnet = db.query(models.Workspace).filter(models.Workspace.name == "BaosVNnet", models.Workspace.created_by == user_id).first()
+    if not ws_vnnet:
+        ws_vnnet = models.Workspace(name="BaosVNnet", created_by=user_id, created_at=datetime(2026, 6, 25, 10, 0, 0))
+        db.add(ws_vnnet)
+        db.commit()
+        db.refresh(ws_vnnet)
+    
+    vnnet_links_info = [
+        {"short_code": "vnn-luattinnguong", "url": "https://vietnamnet.vn/neu-huong-dan-khong-chi-tiet-luat-tin-nguong-ton-giao-kho-di-vao-cuoc-song-2534041.html", "name": "VNN - Luật Tín Ngưỡng Tôn Giáo", "workspace_id": ws_vnnet.id},
+        {"short_code": "vnn-luongthethanh", "url": "https://vietnamnet.vn/luong-the-thanh-thuy-diem-man-nong-tiet-lo-nguyen-tac-hon-nhan-sau-10-nam-2533566.html", "name": "VNN - Lương Thế Thành & Thúy Diễm", "workspace_id": ws_vnnet.id}
+    ]
+
+    for vl in vnnet_links_info:
+        code = vl["short_code"]
+        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.workspace_id == ws_vnnet.id).first()
+        if not link:
+            link = models.Link(
+                original_url=vl["url"],
+                short_code=code,
+                domain_id=None,
+                workspace_id=ws_vnnet.id,
+                status="active",
+                password_hash=None,
+                expired_at=None,
+                created_at=datetime(2026, 6, 25, 10, 0, 0),
+                params=None,
+                name=vl["name"],
+                user_id=user_id
+            )
+            db.add(link)
+            db.commit()
+            db.refresh(link)
+        else:
+            link.user_id = user_id
+            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
+            db.commit()
+        link_ids[code] = link.id
+
+    # 4. Seed data for all these links for days from 2026-06-25 to 2026-07-09.
     for code, lid in link_ids.items():
         db.query(models.ClickLog).filter(models.ClickLog.link_id == lid).delete()
     db.commit()
