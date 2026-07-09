@@ -256,10 +256,173 @@ def temp_seed_db(db: Session = Depends(get_db)):
         current_day += timedelta(days=1)
 
     db.commit()
+
+    # ==========================================
+    # SEEDING FOR NEW TEST ACCOUNT (testuser@gmail.com)
+    # ==========================================
+    # 1. Create testuser@gmail.com
+    test_email = 'testuser@gmail.com'
+    test_user = db.query(models.User).filter(models.User.email == test_email).first()
+    if not test_user:
+        hashed_pwd = utils.hash_password("123456")
+        test_user = models.User(email=test_email, password_hash=hashed_pwd, role="member")
+        if hasattr(models.User, 'username'):
+            setattr(test_user, 'username', 'testuser')
+        db.add(test_user)
+        db.commit()
+        db.refresh(test_user)
+    else:
+        # Reset password to 123456
+        test_user.password_hash = utils.hash_password("123456")
+        db.commit()
+    
+    # 2. Create member1@gmail.com and member2@gmail.com
+    m1_email = 'member1@gmail.com'
+    m1_user = db.query(models.User).filter(models.User.email == m1_email).first()
+    if not m1_user:
+        m1_user = models.User(email=m1_email, password_hash=utils.hash_password("123456"), role="member")
+        if hasattr(models.User, 'username'):
+            setattr(m1_user, 'username', 'member1')
+        db.add(m1_user)
+    else:
+        m1_user.password_hash = utils.hash_password("123456")
+
+    m2_email = 'member2@gmail.com'
+    m2_user = db.query(models.User).filter(models.User.email == m2_email).first()
+    if not m2_user:
+        m2_user = models.User(email=m2_email, password_hash=utils.hash_password("123456"), role="member")
+        if hasattr(models.User, 'username'):
+            setattr(m2_user, 'username', 'member2')
+        db.add(m2_user)
+    else:
+        m2_user.password_hash = utils.hash_password("123456")
+    db.commit()
+    db.refresh(m1_user)
+    db.refresh(m2_user)
+
+    # 3. Create workspace owned by testuser@gmail.com
+    ws_name = "Nhóm Tin Tức Hà Nội"
+    workspace = db.query(models.Workspace).filter(models.Workspace.name == ws_name, models.Workspace.created_by == test_user.id).first()
+    if not workspace:
+        workspace = models.Workspace(name=ws_name, created_by=test_user.id, created_at=datetime(2026, 6, 25, 10, 0, 0))
+        db.add(workspace)
+        db.commit()
+        db.refresh(workspace)
+    
+    # Add members to workspace
+    m1_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace.id,
+        models.WorkspaceMember.user_id == m1_user.id
+    ).first()
+    if not m1_member:
+        m1_member = models.WorkspaceMember(workspace_id=workspace.id, user_id=m1_user.id, role_in_workspace="editor")
+        db.add(m1_member)
+    
+    m2_member = db.query(models.WorkspaceMember).filter(
+        models.WorkspaceMember.workspace_id == workspace.id,
+        models.WorkspaceMember.user_id == m2_user.id
+    ).first()
+    if not m2_member:
+        m2_member = models.WorkspaceMember(workspace_id=workspace.id, user_id=m2_user.id, role_in_workspace="viewer")
+        db.add(m2_member)
+    db.commit()
+
+    # 4. Create links for testuser@gmail.com inside workspace
+    test_links_info = [
+        {"short_code": "hn-express", "url": "https://vnexpress.net", "name": "VnExpress Hà Nội", "workspace_id": workspace.id},
+        {"short_code": "hn-travel", "url": "https://vietnamtourism.gov.vn", "name": "Du Lịch Hà Nội", "workspace_id": workspace.id},
+        {"short_code": "hn-weather", "url": "https://nchmf.gov.vn", "name": "Thời Tiết Hà Nội", "workspace_id": workspace.id},
+        {"short_code": "hn-food", "url": "https://foody.vn", "name": "Ẩm Thực Hà Nội", "workspace_id": workspace.id},
+        {"short_code": "td101-bbn", "url": "https://baobacninhtv.vn/trung-doan-101-tham-gia-hoi-thi-doanh-trai-chinh-quy-xanh-sach-dep--postid449633.bbg", "name": "Báo Bắc Ninh - Trung Đoàn 101", "workspace_id": workspace.id},
+        {"short_code": "nhandan-vungcam", "url": "https://nhandan.vn/bao-dam-su-nghiem-minh-cua-phap-luat-khong-co-vung-cam-khong-co-ngoai-le-post974494.html", "name": "Báo Nhân Dân - Không Vùng Cấm", "workspace_id": workspace.id},
+        {"short_code": "baocamau-dansinh", "url": "https://baocamau.vn/nhieu-kien-nghi-dan-sinh-duoc-cu-tri-gui-den-dai-bieu-hdnd-tinh-a130464.html", "name": "Báo Cà Mau - Kiến Nghị Dân Sinh", "workspace_id": workspace.id},
+        {"short_code": "hanoimoi-dulich", "url": "https://hanoimoi.vn/du-lich", "name": "Hà Nội Mới - Du Lịch", "workspace_id": workspace.id}
+    ]
+
+    test_link_ids = {}
+    for tl in test_links_info:
+        code = tl["short_code"]
+        link = db.query(models.Link).filter(models.Link.short_code == code, models.Link.workspace_id == workspace.id).first()
+        if not link:
+            link = models.Link(
+                original_url=tl["url"],
+                short_code=code,
+                domain_id=None,
+                workspace_id=workspace.id,
+                status="active",
+                password_hash=None,
+                expired_at=None,
+                created_at=datetime(2026, 6, 25, 10, 0, 0),
+                params=None,
+                name=tl["name"],
+                user_id=test_user.id
+            )
+            db.add(link)
+            db.commit()
+            db.refresh(link)
+        else:
+            link.user_id = test_user.id
+            link.created_at = datetime(2026, 6, 25, 10, 0, 0)
+            db.commit()
+        test_link_ids[code] = link.id
+
+    # 5. Delete and seed click logs for test links
+    for code, lid in test_link_ids.items():
+        db.query(models.ClickLog).filter(models.ClickLog.link_id == lid).delete()
+    db.commit()
+
+    current_day = start_date
+    test_total_inserted = 0
+    while current_day <= end_date:
+        for code, lid in test_link_ids.items():
+            if random.random() < 0.20:
+                continue
+            clicks = random.randint(5, 30)
+
+            for _ in range(clicks):
+                hour = random.randint(0, 23)
+                minute = random.randint(0, 59)
+                second = random.randint(0, 59)
+                timestamp = current_day.replace(hour=hour, minute=minute, second=second)
+
+                country = random.choices(countries, weights=country_weights)[0]
+                city = random.choice(cities[country])
+                device = random.choices(devices, weights=device_weights)[0]
+                os_val = random.choices(oses, weights=os_weights)[0]
+                browser = random.choices(browsers, weights=browser_weights)[0]
+                source = random.choices(sources, weights=source_weights)[0]
+                referer = referers.get(source, None)
+                ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
+                new_log = models.ClickLog(
+                    link_id=lid,
+                    ip_address=ip,
+                    country=country,
+                    city=city,
+                    device_type=device,
+                    os=os_val,
+                    browser=browser,
+                    traffic_source=source,
+                    referer=referer,
+                    created_at=timestamp
+                )
+                db.add(new_log)
+                test_total_inserted += 1
+
+        current_day += timedelta(days=1)
+    
+    db.commit()
+
     return {
         "status": "success",
-        "message": f"Database seeded successfully! Total click logs created: {total_inserted} across 8 links.",
-        "links": list(link_ids.keys())
+        "message": f"Database seeded! Clicks added: {total_inserted} for phun111, {test_total_inserted} for testuser.",
+        "test_user": {
+            "email": test_email,
+            "password": "123456",
+            "workspace": ws_name,
+            "members": [m1_email, m2_email],
+            "links": list(test_link_ids.keys())
+        }
     }
 
 # --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
