@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
   ? "http://localhost:8000"
-  : "https://fast.toolhub.app/slink";
+  : "https://short-link-tqp6.onrender.com";
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('login');
