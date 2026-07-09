@@ -458,6 +458,32 @@ def temp_seed_db(db: Session = Depends(get_db)):
     
     db.commit()
 
+    # ==========================================
+    # SEEDING FOR ADMIN ACCOUNTS
+    # ==========================================
+    # Update admin@gmail.com to be an admin with password 123456
+    admin1 = db.query(models.User).filter(models.User.email == 'admin@gmail.com').first()
+    if admin1:
+        admin1.role = 'admin'
+        admin1.password_hash = utils.hash_password("123456")
+    else:
+        admin1 = models.User(email='admin@gmail.com', password_hash=utils.hash_password("123456"), role='admin')
+        if hasattr(models.User, 'username'):
+            setattr(admin1, 'username', 'admin')
+        db.add(admin1)
+    
+    # Create admintest@gmail.com as an admin with password 123456
+    admin2 = db.query(models.User).filter(models.User.email == 'admintest@gmail.com').first()
+    if not admin2:
+        admin2 = models.User(email='admintest@gmail.com', password_hash=utils.hash_password("123456"), role='admin')
+        if hasattr(models.User, 'username'):
+            setattr(admin2, 'username', 'admintest')
+        db.add(admin2)
+    else:
+        admin2.role = 'admin'
+        admin2.password_hash = utils.hash_password("123456")
+    db.commit()
+
     return {
         "status": "success",
         "message": f"Database seeded! Clicks added: {total_inserted} for phun111, {test_total_inserted} for testuser.",
@@ -467,7 +493,11 @@ def temp_seed_db(db: Session = Depends(get_db)):
             "workspace": ws_name,
             "members": [m1_email, m2_email],
             "links": list(test_link_ids.keys())
-        }
+        },
+        "admin_users": [
+            {"email": "admin@gmail.com", "password": "123456", "role": "admin"},
+            {"email": "admintest@gmail.com", "password": "123456", "role": "admin"}
+        ]
     }
 
 # --- API ĐĂNG KÝ TÀI KHOẢN (Fix ATTRIBUTE) ---
