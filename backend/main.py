@@ -41,7 +41,13 @@ models.Base.metadata.create_all(bind=engine)
 for alter_sql in [
     "ALTER TABLE links ADD COLUMN params TEXT",
     "ALTER TABLE links ADD COLUMN name TEXT",
-    "ALTER TABLE click_logs ADD COLUMN is_bot BOOLEAN DEFAULT 0"
+    "ALTER TABLE click_logs ADD COLUMN is_bot BOOLEAN DEFAULT 0",
+    "ALTER TABLE links ADD COLUMN max_clicks INTEGER",
+    "ALTER TABLE links ADD COLUMN utm_source VARCHAR",
+    "ALTER TABLE links ADD COLUMN utm_medium VARCHAR",
+    "ALTER TABLE links ADD COLUMN utm_campaign VARCHAR",
+    "ALTER TABLE links ADD COLUMN utm_content VARCHAR",
+    "ALTER TABLE links ADD COLUMN utm_term VARCHAR"
 ]:
     try:
         with engine.connect() as conn:
@@ -400,8 +406,17 @@ def shorten_url(request: Request, payload: schemas.ShortenRequest, current_user:
     if getattr(payload, 'password', None) and payload.password.strip():
         link_pwd_hash = utils.hash_password(payload.password.strip())
 
+    utm_data = {
+        "utm_source": getattr(payload, 'utm_source', None),
+        "utm_medium": getattr(payload, 'utm_medium', None),
+        "utm_campaign": getattr(payload, 'utm_campaign', None),
+        "utm_content": getattr(payload, 'utm_content', None),
+        "utm_term": getattr(payload, 'utm_term', None)
+    }
+    final_original_url = utils.append_utm_params(payload.url, utm_data)
+
     new_link = models.Link(
-        original_url=payload.url,
+        original_url=final_original_url,
         name=payload.name.strip() if getattr(payload, 'name', None) else None,
         short_code=short_code,
         domain_id=domain_id,
@@ -410,6 +425,12 @@ def shorten_url(request: Request, payload: schemas.ShortenRequest, current_user:
         params=params_value,
         expired_at=payload.expired_at,
         password_hash=link_pwd_hash,
+        max_clicks=getattr(payload, 'max_clicks', None),
+        utm_source=utm_data["utm_source"],
+        utm_medium=utm_data["utm_medium"],
+        utm_campaign=utm_data["utm_campaign"],
+        utm_content=utm_data["utm_content"],
+        utm_term=utm_data["utm_term"],
         status="active"
     )
     db.add(new_link)
@@ -427,6 +448,152 @@ def shorten_url(request: Request, payload: schemas.ShortenRequest, current_user:
         "short_code": short_code,
         "name": new_link.name,
         "short_url": short_url
+    }
+
+@app.post("/api/links/import-csv")
+def import_links_from_csv(
+    file: UploadFile = File(...),
+    workspace_id: Optional[int] = Form(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Chỉ chấp nhận tập tin định dạng .csv")
+        
+    try:
+        content = file.file.read().decode('utf-8-sig')
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Không thể đọc file. Vui lòng đảm bảo file được mã hóa UTF-8.")
+        
+    import csv
+    import io
+    
+    f = io.StringIO(content)
+    reader = csv.DictReader(f)
+    
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="File CSV rỗng hoặc không đúng định dạng")
+        
+    errors = []
+    created_links = []
+    total_rows = 0
+    created_count = 0
+    failed_count = 0
+    processed_aliases = set()
+    
+    for idx, row in enumerate(reader, start=1):
+        total_rows += 1
+        row = {k.strip() if k else "": v.strip() if v else "" for k, v in row.items()}
+        
+        original_url = row.get("original_url")
+        if not original_url:
+            failed_count += 1
+            errors.append({"row": idx, "reason": "Thiếu trường original_url bắt buộc"})
+            continue
+            
+        if not (original_url.startswith("http://") or original_url.startswith("https://")):
+            failed_count += 1
+            errors.append({"row": idx, "reason": "original_url không hợp lệ (phải bắt đầu bằng http:// hoặc https://)"})
+            continue
+            
+        custom_alias = row.get("custom_alias")
+        if custom_alias == "":
+            custom_alias = None
+            
+        if custom_alias:
+            if custom_alias in processed_aliases:
+                failed_count += 1
+                errors.append({"row": idx, "reason": f"Hậu tố tùy chỉnh '{custom_alias}' bị trùng lặp trong file CSV"})
+                continue
+                
+            existing = db.query(models.Link).filter(models.Link.short_code == custom_alias).first()
+            if existing:
+                failed_count += 1
+                errors.append({"row": idx, "reason": f"Hậu tố tùy chỉnh '{custom_alias}' đã tồn tại trên hệ thống"})
+                continue
+                
+        max_clicks = row.get("max_clicks")
+        max_clicks_val = None
+        if max_clicks:
+            try:
+                max_clicks_val = int(max_clicks)
+                if max_clicks_val <= 0:
+                    raise ValueError()
+            except ValueError:
+                failed_count += 1
+                errors.append({"row": idx, "reason": "Giới hạn click (max_clicks) phải là một số nguyên dương"})
+                continue
+                
+        utm_source = row.get("utm_source") or None
+        utm_medium = row.get("utm_medium") or None
+        utm_campaign = row.get("utm_campaign") or None
+        utm_content = row.get("utm_content") or None
+        utm_term = row.get("utm_term") or None
+        
+        utm_data = {
+            "utm_source": utm_source,
+            "utm_medium": utm_medium,
+            "utm_campaign": utm_campaign,
+            "utm_content": utm_content,
+            "utm_term": utm_term
+        }
+        
+        final_original_url = utils.append_utm_params(original_url, utm_data)
+        
+        if custom_alias:
+            short_code = custom_alias
+            processed_aliases.add(custom_alias)
+        else:
+            while True:
+                short_code = utils.generate_short_code()
+                existing = db.query(models.Link).filter(models.Link.short_code == short_code).first()
+                if not existing and short_code not in processed_aliases:
+                    break
+            processed_aliases.add(short_code)
+            
+        title = row.get("title") or None
+        
+        new_link = models.Link(
+            original_url=final_original_url,
+            name=title,
+            short_code=short_code,
+            domain_id=None,
+            workspace_id=workspace_id,
+            user_id=current_user.id,
+            max_clicks=max_clicks_val,
+            utm_source=utm_source,
+            utm_medium=utm_medium,
+            utm_campaign=utm_campaign,
+            utm_content=utm_content,
+            utm_term=utm_term,
+            status="active"
+        )
+        db.add(new_link)
+        created_count += 1
+        
+        created_links.append({
+            "short_code": short_code,
+            "original_url": original_url,
+            "title": title
+        })
+        
+    db.commit()
+    
+    if current_user:
+        create_audit_log(
+            db, 
+            current_user.id, 
+            "import_csv", 
+            f"Thành công: {created_count}, Lỗi: {failed_count}",
+            f"Nhập danh sách liên kết từ CSV. Tổng số dòng: {total_rows}."
+        )
+        
+    return {
+        "total_rows": total_rows,
+        "created": created_count,
+        "failed": failed_count,
+        "errors": errors,
+        "created_links": created_links
     }
 
 # --- API TỰ ĐỘNG XUẤX FILE ẢNH QR CODE ĐỘNG ---
@@ -609,6 +776,195 @@ def get_password_prompt_html(short_code: str, error: Optional[str] = None) -> st
 </body>
 </html>"""
 
+def get_limit_exceeded_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liên kết đạt giới hạn truy cập</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0b0f;
+            color: #e8e8f0;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+        }
+        .card {
+            background-color: #111118;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+        .logo {
+            font-size: 24px;
+            font-weight: 800;
+            margin-bottom: 24px;
+            color: #e8e8f0;
+        }
+        .logo span {
+            color: #ff7675;
+        }
+        .icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            color: #ff7675;
+        }
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #e8e8f0;
+        }
+        p {
+            font-size: 14px;
+            color: #a2a2c2;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+        .footer {
+            margin-top: 24px;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">SLink<span>Track</span></div>
+            <div class="icon">🚫</div>
+            <h1>Liên kết đạt giới hạn</h1>
+            <p>Liên kết này đã đạt giới hạn số lượt truy cập tối đa cho phép và hiện không còn khả dụng.</p>
+            <div class="footer">Cung cấp bởi SLinkTrack</div>
+        </div>
+    </div>
+</body>
+</html>"""
+
+def check_and_create_alerts(db: Session, link: models.Link, click_log: models.ClickLog):
+    if not link.user_id:
+        return
+    now = datetime.utcnow()
+    ten_minutes_ago = now - timedelta(minutes=10)
+    thirty_minutes_ago = now - timedelta(minutes=30)
+    
+    # Rule 1: Click tăng đột biến (> 100 click trong 10 phút)
+    clicks_10m = db.query(models.ClickLog).filter(
+        models.ClickLog.link_id == link.id,
+        models.ClickLog.created_at >= ten_minutes_ago
+    ).count()
+    if clicks_10m > 100:
+        recent_alert = db.query(models.Alert).filter(
+            models.Alert.link_id == link.id,
+            models.Alert.type == "high_traffic",
+            models.Alert.created_at >= thirty_minutes_ago
+        ).first()
+        if not recent_alert:
+            alert = models.Alert(
+                user_id=link.user_id,
+                link_id=link.id,
+                short_code=link.short_code,
+                type="high_traffic",
+                title="Traffic tăng đột biến",
+                message=f"Đường dẫn '{link.short_code}' nhận được hơn 100 lượt truy cập trong 10 phút qua ({clicks_10m} lượt).",
+                severity="high"
+            )
+            db.add(alert)
+            db.commit()
+
+    # Rule 2: Tỷ lệ bot cao (>= 20 clicks trong 10 phút, bot > 50%)
+    if clicks_10m >= 20:
+        bot_clicks_10m = db.query(models.ClickLog).filter(
+            models.ClickLog.link_id == link.id,
+            models.ClickLog.created_at >= ten_minutes_ago,
+            models.ClickLog.is_bot == True
+        ).count()
+        if bot_clicks_10m / clicks_10m > 0.5:
+            recent_alert = db.query(models.Alert).filter(
+                models.Alert.link_id == link.id,
+                models.Alert.type == "bot_spike",
+                models.Alert.created_at >= thirty_minutes_ago
+            ).first()
+            if not recent_alert:
+                alert = models.Alert(
+                    user_id=link.user_id,
+                    link_id=link.id,
+                    short_code=link.short_code,
+                    type="bot_spike",
+                    title="Phát hiện lưu lượng truy cập Bot cao",
+                    message=f"Đường dẫn '{link.short_code}' có tỷ lệ lượt truy cập từ bot vượt quá 50% trong 10 phút qua ({bot_clicks_10m}/{clicks_10m} lượt).",
+                    severity="medium"
+                )
+                db.add(alert)
+                db.commit()
+
+    # Rule 3: Click từ quốc gia lạ
+    if click_log.country and click_log.country != "Unknown":
+        prior_clicks = db.query(models.ClickLog).filter(
+            models.ClickLog.link_id == link.id,
+            models.ClickLog.country == click_log.country,
+            models.ClickLog.id != click_log.id
+        ).count()
+        if prior_clicks == 0:
+            recent_alert = db.query(models.Alert).filter(
+                models.Alert.link_id == link.id,
+                models.Alert.type == "suspicious_country",
+                models.Alert.message.like(f"%{click_log.country}%")
+            ).first()
+            if not recent_alert:
+                alert = models.Alert(
+                    user_id=link.user_id,
+                    link_id=link.id,
+                    short_code=link.short_code,
+                    type="suspicious_country",
+                    title="Truy cập từ quốc gia lạ",
+                    message=f"Đường dẫn '{link.short_code}' nhận được lượt truy cập từ quốc gia mới: {click_log.country}.",
+                    severity="low"
+                )
+                db.add(alert)
+                db.commit()
+
+    # Rule 4: Click từ cùng một IP quá nhiều lần (> 30 lần trong 10 phút)
+    if click_log.ip_address:
+        ip_clicks_10m = db.query(models.ClickLog).filter(
+            models.ClickLog.link_id == link.id,
+            models.ClickLog.ip_address == click_log.ip_address,
+            models.ClickLog.created_at >= ten_minutes_ago
+        ).count()
+        if ip_clicks_10m > 30:
+            recent_alert = db.query(models.Alert).filter(
+                models.Alert.link_id == link.id,
+                models.Alert.type == "suspicious_ip",
+                models.Alert.message.like(f"%{click_log.ip_address}%"),
+                models.Alert.created_at >= thirty_minutes_ago
+            ).first()
+            if not recent_alert:
+                alert = models.Alert(
+                    user_id=link.user_id,
+                    link_id=link.id,
+                    short_code=link.short_code,
+                    type="suspicious_ip",
+                    title="Spam truy cập từ một IP",
+                    message=f"Đường dẫn '{link.short_code}' nhận hơn 30 click từ cùng địa chỉ IP ({click_log.ip_address}) trong 10 phút qua ({ip_clicks_10m} lượt).",
+                    severity="high"
+                )
+                db.add(alert)
+                db.commit()
+
 def perform_tracking_and_redirect(link: models.Link, request: Request, db: Session):
     ip_address = request.client.host if request.client else "127.0.0.1"
     user_agent_string = request.headers.get("user-agent", "")
@@ -679,6 +1035,11 @@ def perform_tracking_and_redirect(link: models.Link, request: Request, db: Sessi
     )
     db.add(new_log)
     db.commit()
+    
+    try:
+        check_and_create_alerts(db, link, new_log)
+    except Exception as ae:
+        print(f"Lỗi kiểm tra alert: {ae}")
 
     target_url = link.original_url
     if getattr(link, 'params', None):
@@ -702,6 +1063,11 @@ def redirect_and_track(short_code: str, request: Request, pwd: Optional[str] = N
     if getattr(link, 'expired_at', None) and link.expired_at < datetime.utcnow():
         raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
 
+    if getattr(link, 'max_clicks', None) is not None:
+        total_clicks = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
+        if total_clicks >= link.max_clicks:
+            return HTMLResponse(content=get_limit_exceeded_html(), status_code=200)
+
     if link.password_hash:
         password_attempt = pwd or request.headers.get("X-Link-Password")
         if not password_attempt or not utils.verify_password(password_attempt.strip(), link.password_hash):
@@ -717,6 +1083,11 @@ def verify_password_and_redirect(short_code: str, request: Request, password: st
 
     if getattr(link, 'expired_at', None) and link.expired_at < datetime.utcnow():
         raise HTTPException(status_code=404, detail="Đường dẫn đã hết hạn.")
+
+    if getattr(link, 'max_clicks', None) is not None:
+        total_clicks = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
+        if total_clicks >= link.max_clicks:
+            return HTMLResponse(content=get_limit_exceeded_html(), status_code=200)
 
     if not link.password_hash:
         return perform_tracking_and_redirect(link, request, db)
@@ -1142,7 +1513,20 @@ def invite_member(workspace_id: int, payload: schemas.WorkspaceInvite, current_u
         
     new_member = models.WorkspaceMember(workspace_id=workspace_id, user_id=invited_user.id, role_in_workspace=payload.role_in_workspace)
     db.add(new_member)
+    
+    # Tạo alert mời thành viên
+    alert = models.Alert(
+        user_id=invited_user.id,
+        link_id=None,
+        short_code=None,
+        type="workspace_invite",
+        title="Bạn được mời vào nhóm mới",
+        message=f"Người dùng {current_user.email} đã mời bạn tham gia nhóm (Workspace ID: {workspace_id}) với vai trò {payload.role_in_workspace}.",
+        severity="medium"
+    )
+    db.add(alert)
     db.commit()
+    
     create_audit_log(db, current_user.id, "invite_member", str(workspace_id), f"Mời thành viên {payload.email} vai trò {payload.role_in_workspace}")
     return {"status": "success", "message": "Mời thành viên tham gia nhóm thành công!"}
 
@@ -1267,6 +1651,8 @@ def get_all_links(workspace_id: Optional[int] = None, current_user: models.User 
                 domain_name = domain_obj.domain_name
 
         click_count = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
+        remaining_clicks = (link.max_clicks - click_count) if getattr(link, 'max_clicks', None) is not None else None
+        
         result.append({
           "short_code": link.short_code,
           "name": link.name,
@@ -1275,7 +1661,15 @@ def get_all_links(workspace_id: Optional[int] = None, current_user: models.User 
           "expired_at": link.expired_at.isoformat() if getattr(link, 'expired_at', None) else None,
           "clicks": click_count,
           "date": link.created_at.strftime('%d/%m/%Y') if hasattr(link, 'created_at') and link.created_at else "12/06/2026",
-          "domain": domain_name
+          "domain": domain_name,
+          "max_clicks": link.max_clicks,
+          "remaining_clicks": remaining_clicks,
+          "is_click_limited": getattr(link, 'max_clicks', None) is not None,
+          "utm_source": getattr(link, 'utm_source', None),
+          "utm_medium": getattr(link, 'utm_medium', None),
+          "utm_campaign": getattr(link, 'utm_campaign', None),
+          "utm_content": getattr(link, 'utm_content', None),
+          "utm_term": getattr(link, 'utm_term', None)
         })
     return result
 
@@ -1325,6 +1719,17 @@ def update_link(short_code: str, payload: schemas.LinkUpdate, current_user: mode
 
     db.commit()
     db.refresh(link)
+    alert = models.Alert(
+        user_id=current_user.id,
+        link_id=link.id,
+        short_code=short_code,
+        type="link_updated",
+        title="Liên kết được cập nhật",
+        message=f"Đường dẫn '{short_code}' đã được cập nhật thông tin thành công.",
+        severity="low"
+    )
+    db.add(alert)
+    db.commit()
     create_audit_log(db, current_user.id, "update_link", short_code, "Cập nhật thông tin link (expired_at, status, name)")
     return {
         "status": "success",
@@ -1358,6 +1763,17 @@ def toggle_link_status(short_code: str, current_user: models.User = Depends(get_
         message = "Đã kích hoạt liên kết hoạt động!"
 
     db.commit()
+    alert = models.Alert(
+        user_id=current_user.id,
+        link_id=link.id,
+        short_code=short_code,
+        type="link_updated",
+        title="Trạng thái liên kết thay đổi",
+        message=f"Đường dẫn '{short_code}' đã chuyển sang trạng thái: {link.status}.",
+        severity="medium" if link.status == "paused" else "low"
+    )
+    db.add(alert)
+    db.commit()
     create_audit_log(db, current_user.id, "update_link", short_code, f"Chuyển trạng thái link sang {link.status}")
     return {"status": "success", "message": message, "new_status": link.status}
 
@@ -1388,7 +1804,22 @@ def delete_link(short_code: str, force: bool = False, current_user: models.User 
             raise HTTPException(status_code=400, detail="Link này đang chạy. Hãy kết thúc chiến dịch trước khi xóa!")
 
     # Xóa
+    db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).delete()
+    db.query(models.LinkEditHistory).filter(models.LinkEditHistory.link_id == link.id).delete()
+    db.query(models.LinkPermission).filter(models.LinkPermission.link_id == link.id).delete()
+    db.query(models.Alert).filter(models.Alert.link_id == link.id).delete()
     db.delete(link)
+    
+    alert = models.Alert(
+        user_id=current_user.id,
+        link_id=None,
+        short_code=short_code,
+        type="link_updated",
+        title="Liên kết đã bị xóa",
+        message=f"Đường dẫn rút gọn '{short_code}' đã bị xóa khỏi hệ thống.",
+        severity="medium"
+    )
+    db.add(alert)
     db.commit()
     create_audit_log(db, current_user.id, "update_link", short_code, f"Xóa link (alias: {short_code})")
     return {"status": "success", "message": "Xóa liên kết rút gọn thành công!"}
@@ -1761,6 +2192,18 @@ def create_link_permission(
     ).first()
     if existing:
         existing.permission = payload.permission
+        
+        # Alert thay đổi quyền
+        alert = models.Alert(
+            user_id=current_user.id,
+            link_id=link.id,
+            short_code=short_code,
+            type="permission_changed",
+            title="Quyền truy cập thay đổi",
+            message=f"Đã cập nhật quyền của nhóm '{target_ws.name}' đối với link '{short_code}' thành '{payload.permission}'.",
+            severity="medium"
+        )
+        db.add(alert)
         db.commit()
         db.refresh(existing)
         create_audit_log(db, current_user.id, "update_permission", short_code, f"Cập nhật quyền cho nhóm {target_ws.name} thành {payload.permission}")
@@ -1772,6 +2215,18 @@ def create_link_permission(
         permission=payload.permission
     )
     db.add(new_perm)
+    
+    # Alert gán quyền mới
+    alert = models.Alert(
+        user_id=current_user.id,
+        link_id=link.id,
+        short_code=short_code,
+        type="permission_changed",
+        title="Gán quyền truy cập mới",
+        message=f"Đã gán quyền cho nhóm '{target_ws.name}' đối với link '{short_code}' là '{payload.permission}'.",
+        severity="medium"
+    )
+    db.add(alert)
     db.commit()
     create_audit_log(db, current_user.id, "update_permission", short_code, f"Gán quyền cho nhóm {target_ws.name}: {payload.permission}")
     return {"status": "success", "message": "Gán quyền thành công!"}
@@ -1839,6 +2294,18 @@ def delete_link_permission(
     ws = db.query(models.Workspace).filter(models.Workspace.id == perm.workspace_id).first()
     ws_name = ws.name if ws else f"ID {perm.workspace_id}"
     db.delete(perm)
+    
+    # Alert xóa quyền
+    alert = models.Alert(
+        user_id=current_user.id,
+        link_id=link.id,
+        short_code=short_code,
+        type="permission_changed",
+        title="Quyền truy cập bị xóa",
+        message=f"Đã xóa quyền của nhóm '{ws_name}' đối với link '{short_code}'.",
+        severity="medium"
+    )
+    db.add(alert)
     db.commit()
     create_audit_log(db, current_user.id, "update_permission", short_code, f"Xóa quyền của nhóm {ws_name}")
     return {"status": "success", "message": "Xóa quyền thành công!"}
@@ -1904,3 +2371,133 @@ def get_audit_logs(
             "created_at": log.created_at.isoformat() if log.created_at else None
         })
     return {"status": "success", "audit_logs": result}
+
+# --- API QUẢN LÝ THÔNG BÁO (NOTIFICATION CENTER) ---
+
+@app.get("/api/notifications")
+def get_notifications(
+    limit: int = 50,
+    unread_only: bool = False,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Tự động quét và tạo alert cho các link sắp hết hạn trong 24 giờ
+    now = datetime.utcnow()
+    one_day_later = now + timedelta(hours=24)
+    expiring_links = db.query(models.Link).filter(
+        models.Link.user_id == current_user.id,
+        models.Link.expired_at > now,
+        models.Link.expired_at <= one_day_later
+    ).all()
+    
+    for link in expiring_links:
+        one_day_ago = now - timedelta(hours=24)
+        recent_alert = db.query(models.Alert).filter(
+            models.Alert.user_id == current_user.id,
+            models.Alert.link_id == link.id,
+            models.Alert.type == "link_expiring",
+            models.Alert.created_at >= one_day_ago
+        ).first()
+        
+        if not recent_alert:
+            alert = models.Alert(
+                user_id=current_user.id,
+                link_id=link.id,
+                short_code=link.short_code,
+                type="link_expiring",
+                title="Link sắp hết hạn",
+                message=f"Đường dẫn '{link.short_code}' sẽ hết hạn vào lúc {link.expired_at.strftime('%d/%m/%Y %H:%M:%S')}.",
+                severity="medium"
+            )
+            db.add(alert)
+            db.commit()
+
+    query = db.query(models.Alert).filter(models.Alert.user_id == current_user.id)
+    if unread_only:
+        query = query.filter(models.Alert.is_read == False)
+        
+    alerts = query.order_by(models.Alert.id.desc()).limit(limit).all()
+    return [
+        {
+            "id": a.id,
+            "type": a.type,
+            "title": a.title,
+            "message": a.message,
+            "severity": a.severity,
+            "is_read": a.is_read,
+            "created_at": a.created_at.isoformat(),
+            "short_code": a.short_code
+        }
+        for a in alerts
+    ]
+
+@app.post("/api/notifications/{id}/read")
+def mark_notification_as_read(
+    id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    alert = db.query(models.Alert).filter(models.Alert.id == id, models.Alert.user_id == current_user.id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thông báo.")
+        
+    alert.is_read = True
+    db.commit()
+    return {"status": "success", "message": "Đã đánh dấu đã đọc."}
+
+@app.post("/api/notifications/read-all")
+def mark_all_notifications_as_read(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db.query(models.Alert).filter(
+        models.Alert.user_id == current_user.id,
+        models.Alert.is_read == False
+    ).update({models.Alert.is_read: True}, synchronize_session=False)
+    db.commit()
+    return {"status": "success", "message": "Đã đánh dấu tất cả thông báo là đã đọc."}
+
+@app.get("/api/notifications/unread-count")
+def get_unread_notifications_count(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    now = datetime.utcnow()
+    one_day_later = now + timedelta(hours=24)
+    expiring_links = db.query(models.Link).filter(
+        models.Link.user_id == current_user.id,
+        models.Link.expired_at > now,
+        models.Link.expired_at <= one_day_later
+    ).all()
+    
+    has_new = False
+    for link in expiring_links:
+        one_day_ago = now - timedelta(hours=24)
+        recent_alert = db.query(models.Alert).filter(
+            models.Alert.user_id == current_user.id,
+            models.Alert.link_id == link.id,
+            models.Alert.type == "link_expiring",
+            models.Alert.created_at >= one_day_ago
+        ).first()
+        
+        if not recent_alert:
+            alert = models.Alert(
+                user_id=current_user.id,
+                link_id=link.id,
+                short_code=link.short_code,
+                type="link_expiring",
+                title="Link sắp hết hạn",
+                message=f"Đường dẫn '{link.short_code}' sẽ hết hạn vào lúc {link.expired_at.strftime('%d/%m/%Y %H:%M:%S')}.",
+                severity="medium"
+            )
+            db.add(alert)
+            has_new = True
+            
+    if has_new:
+        db.commit()
+
+    unread_count = db.query(models.Alert).filter(
+        models.Alert.user_id == current_user.id,
+        models.Alert.is_read == False
+    ).count()
+    return {"unread": unread_count}

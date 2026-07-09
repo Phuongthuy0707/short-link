@@ -188,3 +188,25 @@ def generate_qrcode_stream(
     img_byte_arr.seek(0)
     
     return img_byte_arr
+
+def append_utm_params(original_url: str, utm_data: dict) -> str:
+    from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+    if not utm_data:
+        return original_url
+    
+    # Filter out empty values
+    clean_utm = {k: v for k, v in utm_data.items() if v is not None and str(v).strip() != ""}
+    if not clean_utm:
+        return original_url
+        
+    parsed_url = urlparse(original_url)
+    existing_params = parse_qsl(parsed_url.query)
+    
+    # Combine existing params with new clean utm params
+    combined_params = existing_params + list(clean_utm.items())
+    
+    new_query = urlencode(combined_params)
+    new_url_parts = list(parsed_url)
+    new_url_parts[4] = new_query
+    
+    return urlunparse(new_url_parts)

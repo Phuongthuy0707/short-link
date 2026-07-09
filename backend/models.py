@@ -51,6 +51,12 @@ class Link(Base):
     password_hash = Column(String, nullable=True) # Mật khẩu bảo vệ link nếu có
     params = Column(Text, nullable=True) # URL params để đính kèm thêm vào original_url
     expired_at = Column(DateTime, nullable=True) # Ngày hết hạn link
+    max_clicks = Column(Integer, nullable=True)
+    utm_source = Column(String, nullable=True)
+    utm_medium = Column(String, nullable=True)
+    utm_campaign = Column(String, nullable=True)
+    utm_content = Column(String, nullable=True)
+    utm_term = Column(String, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 # Bảng 6: Lưu trữ log tracking chi tiết phục vụ biểu đồ Analytics
@@ -95,4 +101,18 @@ class AuditLog(Base):
     action = Column(String, nullable=False) # create_link, update_link, update_permission, invite_member
     target = Column(String, nullable=True)
     detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+# Bảng 10: Quản lý cảnh báo (Alert) cho người dùng
+class Alert(Base):
+    __tablename__ = "alerts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    link_id = Column(Integer, ForeignKey("links.id"), nullable=True)
+    short_code = Column(String, nullable=True)
+    type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    severity = Column(String, default="medium")
+    is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now())

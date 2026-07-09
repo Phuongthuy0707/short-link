@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -34,6 +34,19 @@ class ShortenRequest(BaseModel):
     params: Optional[str] = None
     password: Optional[str] = None   
     expired_at: Optional[datetime] = None
+    max_clicks: Optional[int] = None
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
+    utm_content: Optional[str] = None
+    utm_term: Optional[str] = None
+
+    @field_validator('max_clicks')
+    @classmethod
+    def validate_max_clicks(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError('Giới hạn click phải lớn hơn 0')
+        return v
 
 class LinkUpdate(BaseModel):
     name: Optional[str] = None

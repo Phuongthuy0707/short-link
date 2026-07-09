@@ -43,6 +43,139 @@ export default function App() {
     setCurrentScreen(screen);
   };
 
+  const fetchUnreadCount = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/api/notifications/unread-count`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setUnreadCount(data.unread);
+      }
+    } catch (err) {
+      console.error('Error fetching unread count:', err);
+    }
+  };
+
+  const fetchNotifications = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/api/notifications`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setNotifications(data);
+      }
+    } catch (err) {
+      console.error('Error fetching notifications:', err);
+    }
+  };
+
+  const getUtmPreviewUrl = () => {
+    if (!longUrl) return '';
+    try {
+      const cleanUtm = {};
+      if (utmSource.trim()) cleanUtm['utm_source'] = utmSource.trim();
+      if (utmMedium.trim()) cleanUtm['utm_medium'] = utmMedium.trim();
+      if (utmCampaign.trim()) cleanUtm['utm_campaign'] = utmCampaign.trim();
+      if (utmContent.trim()) cleanUtm['utm_content'] = utmContent.trim();
+      if (utmTerm.trim()) cleanUtm['utm_term'] = utmTerm.trim();
+
+      const utmKeys = Object.keys(cleanUtm);
+      if (utmKeys.length === 0) return longUrl;
+
+      const urlObj = new URL(longUrl);
+      utmKeys.forEach(key => {
+        urlObj.searchParams.set(key, cleanUtm[key]);
+      });
+      return urlObj.toString();
+    } catch (e) {
+      let query = '';
+      if (utmSource.trim()) query += `&utm_source=${encodeURIComponent(utmSource.trim())}`;
+      if (utmMedium.trim()) query += `&utm_medium=${encodeURIComponent(utmMedium.trim())}`;
+      if (utmCampaign.trim()) query += `&utm_campaign=${encodeURIComponent(utmCampaign.trim())}`;
+      if (utmContent.trim()) query += `&utm_content=${encodeURIComponent(utmContent.trim())}`;
+      if (utmTerm.trim()) query += `&utm_term=${encodeURIComponent(utmTerm.trim())}`;
+
+      if (!query) return longUrl;
+      const connector = longUrl.includes('?') ? '&' : '?';
+      const cleanQuery = query.startsWith('&') ? query.slice(1) : query;
+      return `${longUrl}${connector}${cleanQuery}`;
+    }
+  };
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      fetchUnreadCount();
+      if (currentScreen === 'notifications') {
+        fetchNotifications();
+      }
+      const interval = setInterval(() => {
+        fetchUnreadCount();
+        if (currentScreen === 'notifications') {
+          fetchNotifications();
+        }
+      }, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [currentScreen]);
+
+  const downloadSampleCsv = () => {
+    const csvContent = "original_url,custom_alias,max_clicks,utm_source,utm_medium,utm_campaign,utm_content,utm_term\n" +
+      "https://google.com,google_alias,100,google,cpc,summer_sale,banner,keywords\n" +
+      "https://github.com,,500,github,social,launch,textlink,";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "short_links_sample.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportCsv = async (e) => {
+    e.preventDefault();
+    if (!csvFile) {
+      showNotification('error', '❌ Lỗi', lang === 'vi' ? 'Vui lòng chọn file CSV trước' : 'Please select a CSV file first');
+      return;
+    }
+    setIsImporting(true);
+    setImportResult(null);
+    const formData = new FormData();
+    formData.append('file', csvFile);
+    const token = localStorage.getItem('token');
+    const headers = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/links/import-csv`, {
+        method: 'POST',
+        headers: headers,
+        body: formData
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setImportResult(data);
+        showNotification('success', '✨ Thành công', lang === 'vi' ? `Import thành công ${data.success_count}/${data.total_rows} links` : `Successfully imported ${data.success_count}/${data.total_rows} links`);
+        fetchAllLinks();
+      } else {
+        showNotification('error', '❌ Lỗi', data.detail || (lang === 'vi' ? 'Không thể import CSV' : 'Failed to import CSV'));
+      }
+    } catch (err) {
+      console.error(err);
+      showNotification('error', '💥 Lỗi', 'Hỏng kết nối.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingShortCode, setEditingShortCode] = useState('');
   const [editExpiredAt, setEditExpiredAt] = useState('');
@@ -121,6 +254,19 @@ export default function App() {
   const [linkParams, setLinkParams] = useState('');
   const [expiredAt, setExpiredAt] = useState('');
   const [linkPassword, setLinkPassword] = useState('');
+  const [maxClicks, setMaxClicks] = useState('');
+  const [utmSource, setUtmSource] = useState('');
+  const [utmMedium, setUtmMedium] = useState('');
+  const [utmCampaign, setUtmCampaign] = useState('');
+  const [utmContent, setUtmContent] = useState('');
+  const [utmTerm, setUtmTerm] = useState('');
+  const [isUtmExpanded, setIsUtmExpanded] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifications, setNotifications] = useState([]);
+  const [isImportCsvOpen, setIsImportCsvOpen] = useState(false);
+  const [csvFile, setCsvFile] = useState(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -1506,7 +1652,13 @@ export default function App() {
           params: linkParams || null,
           workspace_id: selectedWorkspaceForLink ? parseInt(selectedWorkspaceForLink) : null,
           expired_at: expiredAt ? new Date(expiredAt).toISOString() : null,
-          password: linkPassword || null
+          password: linkPassword || null,
+          max_clicks: maxClicks ? parseInt(maxClicks) : null,
+          utm_source: utmSource || null,
+          utm_medium: utmMedium || null,
+          utm_campaign: utmCampaign || null,
+          utm_content: utmContent || null,
+          utm_term: utmTerm || null
         })
       });
       const data = await response.json();
@@ -1517,6 +1669,7 @@ export default function App() {
         setIsSuccessOpen(true);
         setIsCreateOpen(false);
         setLongUrl(''); setLinkName(''); setCustomAlias(''); setCustomDomain(''); setLinkParams(''); setExpiredAt(''); setLinkPassword('');
+        setMaxClicks(''); setUtmSource(''); setUtmMedium(''); setUtmCampaign(''); setUtmContent(''); setUtmTerm(''); setIsUtmExpanded(false);
         fetchAllLinks();
         fetchLinkAnalytics(data.short_code);
       } else {
@@ -1932,6 +2085,16 @@ export default function App() {
             <div className="px-3 mb-1 flex-1">
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 {t.dashboardTitle}</div>
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
+              <div className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'notifications' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('notifications')}>
+                <div className="flex items-center gap-2.5">
+                  🔔 {lang === 'vi' ? 'Thông báo' : 'Notifications'}
+                </div>
+                {unreadCount > 0 && (
+                  <span className="bg-[#ff7675] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    {unreadCount}
+                  </span>
+                )}
+              </div>
               {(userRole === 'admin' || username.toLowerCase().startsWith('admin')) && (
                 <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'admin' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => { fetchAdminData(); setCurrentScreen('admin'); }}>
                   ⚙️ {lang === 'vi' ? 'Quản trị hệ thống' : 'System Admin'}
@@ -1954,6 +2117,12 @@ export default function App() {
                 </select>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.08)] hover:bg-[#202029] text-[#a29bfe] px-4 py-2 rounded-lg font-semibold text-xs cursor-pointer transition-colors"
+                  onClick={() => { setCsvFile(null); setImportResult(null); setIsImportCsvOpen(true); }}
+                >
+                  📥 Import CSV
+                </button>
                 <button className="bg-[#6c5ce7] text-white px-4 py-2 rounded-lg font-semibold text-xs cursor-pointer" onClick={() => setIsCreateOpen(true)}>{t.createLink}</button>
                 <select value={lang} onChange={(e) => updateLanguage(e.target.value)} className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] rounded-lg px-2.5 py-1.5 text-xs text-white outline-none cursor-pointer">
                   <option value="vi">VN</option>
@@ -2061,8 +2230,33 @@ export default function App() {
                     {links.map((link, idx) => (
                       <tr key={idx} className="border-b border-[rgba(255,255,255,0.04)] cursor-pointer" onClick={() => openLinkDetails(link.short_code)}>
                         <td className="p-4 text-xs font-mono text-[#a29bfe]">
-                          {link.domain ? `${link.domain}/${link.short_code}` : `/${link.short_code}`}
-                          {link.password_hash && <span className="ml-1.5 text-xs text-[#eccc68]" title={lang === 'vi' ? 'Có mật khẩu bảo vệ' : 'Password protected'}>🔒</span>}
+                          <div className="flex items-center flex-wrap gap-1">
+                            <span>{link.domain ? `${link.domain}/${link.short_code}` : `/${link.short_code}`}</span>
+                            {link.password_hash && <span className="ml-1.5 text-xs text-[#eccc68]" title={lang === 'vi' ? 'Có mật khẩu bảo vệ' : 'Password protected'}>🔒</span>}
+                            {link.utm_source && (
+                              <span className="ml-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#74b9ff]/20 text-[#74b9ff] uppercase" title={`UTM: source=${link.utm_source}, medium=${link.utm_medium}, campaign=${link.utm_campaign}`}>
+                                UTM
+                              </span>
+                            )}
+                          </div>
+                          {link.is_click_limited && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {link.remaining_clicks <= 0 ? (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#ff7675]/25 text-[#ff7675]">
+                                  🚫 {lang === 'vi' ? 'Đã hết lượt' : 'Limit Reached'}
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#a29bfe]/25 text-[#a29bfe]">
+                                    🎯 {lang === 'vi' ? `Giới hạn: ${link.max_clicks}` : `Limit: ${link.max_clicks}`}
+                                  </span>
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#55efc4]/25 text-[#55efc4]">
+                                    🔑 {lang === 'vi' ? `Còn lại: ${link.remaining_clicks}` : `Remaining: ${link.remaining_clicks}`}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="p-4 text-xs font-mono">{link.clicks}</td>
                         <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}><button className="bg-[#18181f] px-2 py-1 border border-[rgba(255,255,255,0.1)] text-xs rounded cursor-pointer" onClick={() => { setSelectedShortCode(link.short_code); setIsQrOpen(true); }}>◼</button></td>
@@ -2197,6 +2391,67 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Click limit stats (Hạng mục 1) */}
+            {(() => {
+              const activeLinkObj = links.find(l => l.short_code === activeShortCode);
+              return activeLinkObj?.is_click_limited && (
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
+                    <div className="text-[11px] text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Giới hạn click' : 'Click limit'}</div>
+                    <div className="text-2xl font-extrabold text-[#ff7675] mt-1">{activeLinkObj.max_clicks}</div>
+                  </div>
+                  <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5">
+                    <div className="text-[11px] text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Lượt click còn lại' : 'Remaining clicks'}</div>
+                    <div className="text-2xl font-extrabold text-[#55efc4] mt-1">
+                      {activeLinkObj.remaining_clicks <= 0 ? (lang === 'vi' ? 'Đã hết lượt' : 'Limit reached') : activeLinkObj.remaining_clicks}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* UTM campaign parameters details (Hạng mục 2) */}
+            {(() => {
+              const activeLinkObj = links.find(l => l.short_code === activeShortCode);
+              return (activeLinkObj?.utm_source || activeLinkObj?.utm_medium || activeLinkObj?.utm_campaign) && (
+                <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 mb-6">
+                  <div className="text-xs font-bold text-[#74b9ff] uppercase mb-3">🛠️ UTM Campaign Parameters</div>
+                  <div className="grid grid-cols-5 gap-4">
+                    {activeLinkObj.utm_source && (
+                      <div>
+                        <div className="text-[9px] text-[#7a7a9a] uppercase font-bold">Source</div>
+                        <div className="text-xs text-white font-mono mt-1 break-all">{activeLinkObj.utm_source}</div>
+                      </div>
+                    )}
+                    {activeLinkObj.utm_medium && (
+                      <div>
+                        <div className="text-[9px] text-[#7a7a9a] uppercase font-bold">Medium</div>
+                        <div className="text-xs text-white font-mono mt-1 break-all">{activeLinkObj.utm_medium}</div>
+                      </div>
+                    )}
+                    {activeLinkObj.utm_campaign && (
+                      <div>
+                        <div className="text-[9px] text-[#7a7a9a] uppercase font-bold">Campaign</div>
+                        <div className="text-xs text-white font-mono mt-1 break-all">{activeLinkObj.utm_campaign}</div>
+                      </div>
+                    )}
+                    {activeLinkObj.utm_content && (
+                      <div>
+                        <div className="text-[9px] text-[#7a7a9a] uppercase font-bold">Content</div>
+                        <div className="text-xs text-white font-mono mt-1 break-all">{activeLinkObj.utm_content}</div>
+                      </div>
+                    )}
+                    {activeLinkObj.utm_term && (
+                      <div>
+                        <div className="text-[9px] text-[#7a7a9a] uppercase font-bold">Term</div>
+                        <div className="text-xs text-white font-mono mt-1 break-all">{activeLinkObj.utm_term}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* BIỂU ĐỒ CỘT CLICK THEO 24 GIỜ */}
             <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-xl p-5 flex flex-col mb-6">
@@ -2342,6 +2597,131 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL IMPORT CSV (Hạng mục 3) */}
+      {isImportCsvOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-fade-in text-[#e8e8f0]">
+          <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[550px] p-6 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex justify-between items-center mb-4 shrink-0">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                📥 {lang === 'vi' ? 'Import liên kết từ file CSV' : 'Import Links from CSV'}
+              </h3>
+              <button
+                type="button"
+                className="text-sm text-[#7a7a9a] hover:text-white transition-colors cursor-pointer"
+                onClick={() => { setIsImportCsvOpen(false); setImportResult(null); setCsvFile(null); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 pr-1 space-y-4">
+              <div className="bg-[#18181f] p-3 rounded-lg border border-[rgba(255,255,255,0.05)] text-xs text-[#a2a2c2] leading-relaxed">
+                <p className="font-semibold text-white mb-1">💡 Hướng dẫn định dạng CSV:</p>
+                <ul className="list-disc pl-4 space-y-1 mt-1 text-[#7a7a9a]">
+                  <li>Trường <code className="text-[#a29bfe]">original_url</code> bắt buộc (phải bắt đầu bằng <code className="text-[#a29bfe]">http://</code> hoặc <code className="text-[#a29bfe]">https://</code>).</li>
+                  <li>Trường <code className="text-[#a29bfe]">custom_alias</code> không trùng lặp.</li>
+                  <li>Trường <code className="text-[#a29bfe]">max_clicks</code> là số nguyên dương.</li>
+                  <li>Hỗ trợ ghép UTM qua các cột: <code className="text-[#a29bfe]">utm_source</code>, <code className="text-[#a29bfe]">utm_medium</code>, <code className="text-[#a29bfe]">utm_campaign</code>, <code className="text-[#a29bfe]">utm_content</code>, <code className="text-[#a29bfe]">utm_term</code>.</li>
+                </ul>
+                <button
+                  type="button"
+                  onClick={downloadSampleCsv}
+                  className="mt-3 bg-[#6c5ce7] hover:bg-[#5b4bc4] text-white font-bold px-3 py-1 rounded text-[10px] transition-colors cursor-pointer"
+                >
+                  📥 Tải file CSV mẫu (Blob download)
+                </button>
+              </div>
+
+              <form onSubmit={handleImportCsv} className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">Chọn file CSV của bạn</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      required
+                      type="file"
+                      id="csv-file-input"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                    />
+                    <label
+                      htmlFor="csv-file-input"
+                      className="bg-[#18181f] border border-[rgba(255,255,255,0.08)] hover:bg-[#202029] text-white px-3 py-2 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                    >
+                      Choose File
+                    </label>
+                    <span className="text-xs text-[#7a7a9a] truncate max-w-[250px]">
+                      {csvFile ? csvFile.name : (lang === 'vi' ? 'Chưa chọn file nào' : 'No file selected')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 border-t border-[rgba(255,255,255,0.05)] pt-3">
+                  <button
+                    type="button"
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-2 rounded-lg text-xs text-[#a29bfe] cursor-pointer hover:bg-[rgba(255,255,255,0.03)]"
+                    onClick={() => { setIsImportCsvOpen(false); setImportResult(null); setCsvFile(null); }}
+                  >
+                    {t.cancel}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isImporting}
+                    className="bg-[#6c5ce7] hover:bg-[#5b4bc4] disabled:opacity-50 px-5 py-2 rounded-lg text-white text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    {isImporting ? (lang === 'vi' ? 'Đang import...' : 'Importing...') : (lang === 'vi' ? 'Bắt đầu Import' : 'Start Import')}
+                  </button>
+                </div>
+              </form>
+
+              {importResult && (
+                <div className="border-t border-[rgba(255,255,255,0.07)] pt-4 mt-2">
+                  <h4 className="text-xs font-bold text-white mb-2">📊 Kết quả Import:</h4>
+                  <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+                    <div className="bg-[#181824] border border-[rgba(255,255,255,0.05)] rounded-lg p-2.5">
+                      <div className="text-[10px] text-[#7a7a9a] uppercase">Tổng dòng</div>
+                      <div className="text-lg font-bold text-[#e8e8f0]">{importResult.total_rows}</div>
+                    </div>
+                    <div className="bg-[rgba(85,239,196,0.1)] border border-[rgba(85,239,196,0.2)] rounded-lg p-2.5">
+                      <div className="text-[10px] text-[#2ed573] uppercase">Thành công</div>
+                      <div className="text-lg font-bold text-[#2ed573]">{importResult.success_count}</div>
+                    </div>
+                    <div className="bg-[rgba(255,118,117,0.1)] border border-[rgba(255,118,117,0.2)] rounded-lg p-2.5">
+                      <div className="text-[10px] text-[#ff7675] uppercase">Lỗi</div>
+                      <div className="text-lg font-bold text-[#ff7675]">{importResult.failed_count}</div>
+                    </div>
+                  </div>
+
+                  {importResult.errors && importResult.errors.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-bold text-[#ff7675] uppercase mb-2">⚠️ Danh sách lỗi chi tiết:</div>
+                      <div className="max-h-[180px] overflow-y-auto border border-[rgba(255,255,255,0.08)] rounded-lg">
+                        <table className="w-full text-left text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-[#18181f] text-[#7a7a9a] border-b border-[rgba(255,255,255,0.08)]">
+                              <th className="p-2 w-16">Dòng</th>
+                              <th className="p-2">Lý do thất bại</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {importResult.errors.map((err, idx) => (
+                              <tr key={idx} className="border-b border-[rgba(255,255,255,0.04)] text-[#a2a2c2]">
+                                <td className="p-2 font-mono text-[#ff7675]">#{err.row}</td>
+                                <td className="p-2">{err.reason}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL TẠO LINK MỚI */}
       {isCreateOpen && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
@@ -2359,6 +2739,93 @@ export default function App() {
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customDomain} onChange={(e) => setCustomDomain(e.target.value)} placeholder={t.domainPlaceholder} />
               <input type="text" autoComplete="off" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkParams} onChange={(e) => setLinkParams(e.target.value)} placeholder={t.paramsPlaceholder} />
               <input type="password" autoComplete="new-password" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder={lang === 'vi' ? 'Mật khẩu bảo vệ (Không bắt buộc)' : 'Protection password (Optional)'} />
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">
+                  {lang === 'vi' ? 'Giới hạn số lượt click (Không bắt buộc)' : 'Click limit (Optional)'}
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none"
+                  value={maxClicks}
+                  onChange={(e) => setMaxClicks(e.target.value)}
+                  placeholder={lang === 'vi' ? 'Ví dụ: 100' : 'e.g. 100'}
+                />
+              </div>
+              <div className="border border-[rgba(255,255,255,0.07)] rounded-lg p-3 bg-[#15151c]">
+                <button
+                  type="button"
+                  className="w-full flex justify-between items-center text-xs font-bold text-[#a29bfe] outline-none"
+                  onClick={() => setIsUtmExpanded(!isUtmExpanded)}
+                >
+                  <span>🛠️ UTM Campaign Builder</span>
+                  <span>{isUtmExpanded ? '▲' : '▼'}</span>
+                </button>
+                {isUtmExpanded && (
+                  <div className="flex flex-col gap-3 mt-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] font-bold text-[#7a7a9a] uppercase">UTM Source</label>
+                      <input
+                        type="text"
+                        className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded p-1.5 text-xs text-white font-mono outline-none"
+                        value={utmSource}
+                        onChange={(e) => setUtmSource(e.target.value)}
+                        placeholder="e.g. facebook, google, newsletter"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] font-bold text-[#7a7a9a] uppercase">UTM Medium</label>
+                      <input
+                        type="text"
+                        className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded p-1.5 text-xs text-white font-mono outline-none"
+                        value={utmMedium}
+                        onChange={(e) => setUtmMedium(e.target.value)}
+                        placeholder="e.g. cpc, social, email"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] font-bold text-[#7a7a9a] uppercase">UTM Campaign</label>
+                      <input
+                        type="text"
+                        className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded p-1.5 text-xs text-white font-mono outline-none"
+                        value={utmCampaign}
+                        onChange={(e) => setUtmCampaign(e.target.value)}
+                        placeholder="e.g. summer_sale, launch"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] font-bold text-[#7a7a9a] uppercase">UTM Content</label>
+                      <input
+                        type="text"
+                        className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded p-1.5 text-xs text-white font-mono outline-none"
+                        value={utmContent}
+                        onChange={(e) => setUtmContent(e.target.value)}
+                        placeholder="e.g. textlink, banner_ad"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] font-bold text-[#7a7a9a] uppercase">UTM Term</label>
+                      <input
+                        type="text"
+                        className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded p-1.5 text-xs text-white font-mono outline-none"
+                        value={utmTerm}
+                        onChange={(e) => setUtmTerm(e.target.value)}
+                        placeholder="e.g. keywords"
+                      />
+                    </div>
+                    {longUrl && (
+                      <div className="mt-1 bg-[#111118] p-2 rounded border border-[rgba(255,255,255,0.05)]">
+                        <div className="text-[9px] font-bold text-[#7a7a9a] uppercase mb-1">
+                          {lang === 'vi' ? 'Xem trước URL có UTM (Cập nhật trực tiếp):' : 'UTM URL Preview (Realtime):'}
+                        </div>
+                        <div className="text-[10px] font-mono break-all text-[#55efc4]">
+                          {getUtmPreviewUrl()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">{lang === 'vi' ? 'Ngày hết hạn (Không bắt buộc)' : 'Expiration date (Optional)'}</label>
                 <input
@@ -2744,6 +3211,16 @@ export default function App() {
             <div className="px-3 mb-1 flex-1">
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 {t.dashboardTitle}</div>
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
+              <div className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'notifications' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('notifications')}>
+                <div className="flex items-center gap-2.5">
+                  🔔 {lang === 'vi' ? 'Thông báo' : 'Notifications'}
+                </div>
+                {unreadCount > 0 && (
+                  <span className="bg-[#ff7675] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    {unreadCount}
+                  </span>
+                )}
+              </div>
               {(userRole === 'admin' || username.toLowerCase().startsWith('admin')) && (
                 <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'admin' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => { fetchAdminData(); setCurrentScreen('admin'); }}>
                   ⚙️ {lang === 'vi' ? 'Quản trị hệ thống' : 'System Admin'}
@@ -2939,6 +3416,16 @@ export default function App() {
             <div className="px-3 mb-1 flex-1">
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 {t.dashboardTitle}</div>
               <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
+              <div className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'notifications' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('notifications')}>
+                <div className="flex items-center gap-2.5">
+                  🔔 {lang === 'vi' ? 'Thông báo' : 'Notifications'}
+                </div>
+                {unreadCount > 0 && (
+                  <span className="bg-[#ff7675] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    {unreadCount}
+                  </span>
+                )}
+              </div>
               {(userRole === 'admin' || username.toLowerCase().startsWith('admin')) && (
                 <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'admin' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => { fetchAdminData(); setCurrentScreen('admin'); }}>
                   ⚙️ {lang === 'vi' ? 'Quản trị hệ thống' : 'System Admin'}
@@ -3556,6 +4043,154 @@ export default function App() {
               <button className="bg-[#18181f] border border-[rgba(255,255,255,0.1)] px-4 py-1.5 rounded-lg text-xs text-[#a29bfe]" onClick={() => setIsMembersListOpen(false)}>
                 {t.close}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TRUNG TÂM THÔNG BÁO (NOTIFICATION CENTER) */}
+      {currentScreen === 'notifications' && (
+        <div className="flex w-full min-h-screen text-[#e8e8f0]">
+          {/* SIDEBAR */}
+          <aside className="w-[220px] bg-[#111118] border-r border-[rgba(255,255,255,0.07)] flex flex-col py-6 fixed top-0 left-0 bottom-0 select-none">
+            <div className="px-5 pb-7 flex items-center gap-2.5">
+              <div className="text-xl font-extrabold text-[#e8e8f0]">SLink<span className="text-[#a29bfe]">Track</span></div>
+            </div>
+            <div className="px-3 mb-1 flex-1">
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer ${currentScreen === 'dashboard' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('dashboard')}>📊 {t.dashboardTitle}</div>
+              <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'workspaces' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('workspaces')}>👥 {t.workspaces}</div>
+              <div className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'notifications' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => setCurrentScreen('notifications')}>
+                <div className="flex items-center gap-2.5">
+                  🔔 {lang === 'vi' ? 'Thông báo' : 'Notifications'}
+                </div>
+                {unreadCount > 0 && (
+                  <span className="bg-[#ff7675] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    {unreadCount}
+                  </span>
+                )}
+              </div>
+              {(userRole === 'admin' || username.toLowerCase().startsWith('admin')) && (
+                <div className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs cursor-pointer mt-1 ${currentScreen === 'admin' ? 'bg-[rgba(108,92,231,0.15)] text-[#a29bfe]' : 'text-[#7a7a9a] hover:bg-[#18181f]'}`} onClick={() => { fetchAdminData(); setCurrentScreen('admin'); }}>
+                  ⚙️ {lang === 'vi' ? 'Quản trị hệ thống' : 'System Admin'}
+                </div>
+              )}
+            </div>
+            <div className="px-5 pt-4 border-t border-[rgba(255,255,255,0.07)] flex justify-between items-center">
+              <div className="text-[11px] font-semibold truncate max-w-[80px]">{username}</div>
+              <button className="text-[10px] text-[#ff7675] cursor-pointer" onClick={() => { localStorage.clear(); setCurrentScreen('login'); }}>{t.logout}</button>
+            </div>
+          </aside>
+
+          {/* MAIN CONTENT AREA */}
+          <div className="ml-[220px] flex-1 flex flex-col min-h-screen bg-[#0a0a0f] p-6">
+            <div className="max-w-[800px] mx-auto w-full">
+              <div className="flex items-center justify-between gap-3 mb-6 pb-4 border-b border-[rgba(255,255,255,0.07)]">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    🔔 {lang === 'vi' ? 'Trung tâm thông báo' : 'Notification Center'}
+                  </h2>
+                  <p className="text-xs text-[#7a7a9a] mt-1">
+                    {lang === 'vi' ? 'Xem các cập nhật hệ thống và cảnh báo lượt click bất thường' : 'View system updates and suspicious click alerts'}
+                  </p>
+                </div>
+                {notifications.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      const token = localStorage.getItem('token');
+                      try {
+                        const response = await fetch(`${API_URL}/api/notifications/read-all`, {
+                          method: 'POST',
+                          headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        if (response.ok) {
+                          showNotification('success', '🔔 Thành công', lang === 'vi' ? 'Đã đánh dấu đọc tất cả thông báo' : 'Marked all as read');
+                          fetchNotifications();
+                          fetchUnreadCount();
+                        }
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                    className="bg-[#18181f] border border-[rgba(255,255,255,0.08)] hover:bg-[#202029] px-3.5 py-1.5 rounded-lg text-xs font-semibold text-[#a29bfe] cursor-pointer transition-colors"
+                  >
+                    {lang === 'vi' ? 'Đánh dấu đọc tất cả' : 'Mark all as read'}
+                  </button>
+                )}
+              </div>
+
+              {notifications.length === 0 ? (
+                <div className="bg-[#111118] border border-[rgba(255,255,255,0.05)] rounded-2xl p-12 text-center text-[#7a7a9a]">
+                  <div className="text-3xl mb-3">📭</div>
+                  <div className="text-xs">
+                    {lang === 'vi' ? 'Bạn chưa có thông báo nào.' : 'You have no notifications.'}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {notifications.map((item) => {
+                    let emoji = '🔔';
+                    if (item.type === 'high_traffic') emoji = '📈';
+                    else if (item.type === 'bot_spike') emoji = '🤖';
+                    else if (item.type === 'suspicious_country') emoji = '🌐';
+                    else if (item.type === 'suspicious_ip') emoji = '🔒';
+                    else if (item.type === 'link_expiring') emoji = '⏳';
+                    else if (item.type === 'permission_changed') emoji = '🔑';
+                    else if (item.type === 'workspace_invite') emoji = '👥';
+                    else if (item.type === 'link_updated') emoji = '✏️';
+
+                    let severityColor = 'border-l-4 border-l-[#7a7a9a]';
+                    if (item.severity === 'high') severityColor = 'border-l-4 border-l-[#ff7675]';
+                    else if (item.severity === 'medium') severityColor = 'border-l-4 border-l-[#fdcb6e]';
+                    else if (item.severity === 'low') severityColor = 'border-l-4 border-l-[#74b9ff]';
+
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={async () => {
+                          if (!item.is_read) {
+                            const token = localStorage.getItem('token');
+                            try {
+                              await fetch(`${API_URL}/api/notifications/${item.id}/read`, {
+                                method: 'POST',
+                                headers: { 'Authorization': `Bearer ${token}` }
+                              });
+                              fetchUnreadCount();
+                            } catch (err) {
+                              console.error(err);
+                            }
+                          }
+                          if (item.short_code) {
+                            openLinkDetails(item.short_code);
+                          } else {
+                            fetchNotifications();
+                          }
+                        }}
+                        className={`bg-[#111118] border border-[rgba(255,255,255,0.06)] rounded-xl p-4 flex gap-4 cursor-pointer hover:bg-[#151520] transition-colors relative ${severityColor} ${!item.is_read ? 'bg-[#151522]' : ''}`}
+                      >
+                        <div className="text-xl flex items-center justify-center bg-[#181824] rounded-lg w-10 h-10 select-none">
+                          {emoji}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-xs font-bold ${!item.is_read ? 'text-[#a29bfe]' : 'text-white'}`}>
+                              {item.title}
+                            </span>
+                            <span className="text-[10px] text-[#7a7a9a]">
+                              {new Date(item.created_at).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#a2a2c2] mt-1.5 line-clamp-2 leading-relaxed">
+                            {item.message}
+                          </p>
+                        </div>
+                        {!item.is_read && (
+                          <div className="w-2.5 h-2.5 bg-[#ff7675] rounded-full self-center ml-2 shrink-0"></div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
