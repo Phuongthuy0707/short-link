@@ -88,13 +88,13 @@ def send_email(subject: str, body: str, to_email: str, from_email: str = None) -
 
 # 5. Hàm tạo mã QR Code dưới dạng luồng dữ liệu Bytes (Mới bổ sung)
 def generate_qrcode_stream(
-    short_code: str,
+    target_url: str,
     fill_color: str = "black",
     back_color: str = "white",
     logo_bytes: Optional[bytes] = None,
     format: str = "png"
 ) -> io.BytesIO:
-    short_url = f"http://localhost:8000/{short_code}"
+    short_url = target_url
     
     # Chuẩn hóa mã màu hex nếu thiếu dấu #
     if len(fill_color) == 6 and all(c in "0123456789abcdefABCDEF" for c in fill_color):

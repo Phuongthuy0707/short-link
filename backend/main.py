@@ -600,6 +600,7 @@ def import_links_from_csv(
 @app.get("/api/qrcode/{short_code}")
 def get_qr_code(
     short_code: str,
+    request: Request,
     fill_color: str = "black",
     back_color: str = "white",
     format: str = "png",
@@ -609,13 +610,20 @@ def get_qr_code(
     if not link:
         raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn tương ứng để tạo QR!")
         
-    qr_stream = utils.generate_qrcode_stream(short_code, fill_color=fill_color, back_color=back_color, format=format)
+    if link.domain:
+        target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
+    else:
+        base_url = str(request.base_url).rstrip("/")
+        target_url = f"{base_url}/{short_code}"
+        
+    qr_stream = utils.generate_qrcode_stream(target_url, fill_color=fill_color, back_color=back_color, format=format)
     media_type = "image/svg+xml" if format.lower() == "svg" else "image/png"
     return StreamingResponse(qr_stream, media_type=media_type)
 
 @app.post("/api/qrcode/{short_code}/custom")
 async def customize_qr_code(
     short_code: str,
+    request: Request,
     fill_color: str = Form("black"),
     back_color: str = Form("white"),
     logo: Optional[UploadFile] = File(None),
@@ -630,8 +638,14 @@ async def customize_qr_code(
     if logo and logo.filename:
         logo_bytes = await logo.read()
         
+    if link.domain:
+        target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
+    else:
+        base_url = str(request.base_url).rstrip("/")
+        target_url = f"{base_url}/{short_code}"
+        
     qr_stream = utils.generate_qrcode_stream(
-        short_code, 
+        target_url, 
         fill_color=fill_color, 
         back_color=back_color, 
         logo_bytes=logo_bytes,
