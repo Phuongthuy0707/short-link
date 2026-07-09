@@ -29,6 +29,20 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [countdown]);
 
+  const navigateTo = (screen) => {
+    setUsername('');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setForgotEmail('');
+    setResetEmail('');
+    setOtp('');
+    setResetPassword('');
+    setResetConfirmPassword('');
+    setIsOtpVerified(false);
+    setCurrentScreen(screen);
+  };
+
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingShortCode, setEditingShortCode] = useState('');
   const [editExpiredAt, setEditExpiredAt] = useState('');
@@ -1400,7 +1414,7 @@ export default function App() {
                   </button>
 
                   {/* Forgot password button */}
-                  <button type="button" onClick={() => setCurrentScreen('forgot')} className="text-center text-xs text-[#a29bfe] hover:underline cursor-pointer block mt-1">
+                  <button type="button" onClick={() => navigateTo('forgot')} className="text-center text-xs text-[#a29bfe] hover:underline cursor-pointer block mt-1">
                     {t.forgot}
                   </button>
                 </form>
@@ -1432,7 +1446,7 @@ export default function App() {
                 {/* Green register button */}
                 <button 
                   type="button" 
-                  onClick={() => setCurrentScreen('register')} 
+                  onClick={() => navigateTo('register')} 
                   className="bg-[#42b72a] hover:bg-[#36a420] text-white text-xs font-bold py-2.5 px-4 rounded-lg transition-colors mx-auto block cursor-pointer whitespace-nowrap"
                 >
                   {lang === 'vi' ? 'Tạo tài khoản mới' : 'Create new account'}
@@ -1486,7 +1500,7 @@ export default function App() {
               </div>
               <button type="submit" className="bg-[#00cec9] text-[#0a0a0f] text-xs font-bold py-2.5 rounded-xl cursor-pointer">{t.registerSubmit}</button>
             </form>
-            <div className="text-center text-xs text-[#7a7a9a] mt-5">{t.haveAccount} <span className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => setCurrentScreen('login')}>{t.login}</span></div>
+            <div className="text-center text-xs text-[#7a7a9a] mt-5">{t.haveAccount} <span className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => navigateTo('login')}>{t.login}</span></div>
           </div>
         </div>
       )}
@@ -1503,7 +1517,7 @@ export default function App() {
               </div>
               <button type="submit" className="bg-[#fdcb6e] text-[#0a0a0f] text-xs font-bold py-2.5 rounded-xl cursor-pointer">{t.forgotSubmit}</button>
             </form>
-            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => setCurrentScreen('login')}>{t.backToLogin}</button></div>
+            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => navigateTo('login')}>{t.backToLogin}</button></div>
           </div>
         </div>
       )}
@@ -1563,7 +1577,7 @@ export default function App() {
               </form>
             )}
             
-            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => { setCurrentScreen('login'); setIsOtpVerified(false); }}>{t.backToLogin}</button></div>
+            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => navigateTo('login')}>{t.backToLogin}</button></div>
           </div>
         </div>
       )}
