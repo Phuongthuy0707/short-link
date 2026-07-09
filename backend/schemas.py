@@ -87,3 +87,7 @@ class AdminWorkspaceCreate(BaseModel):
 
 class AdminWorkspaceUpdate(BaseModel):
     name: str
+
+class VerifyOTP(BaseModel):
+    email: EmailStr
+    otp: str

@@ -10,6 +10,12 @@ import ssl
 import smtplib
 from email.message import EmailMessage
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # SMTP / email cấu hình
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

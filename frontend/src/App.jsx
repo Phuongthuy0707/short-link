@@ -16,6 +16,7 @@ export default function App() {
   const [resetConfirmPassword, setResetConfirmPassword] = useState('');
   const [resetEmail, setResetEmail] = useState('');
   const [otp, setOtp] = useState('');
+  const [isOtpVerified, setIsOtpVerified] = useState(false);
   const [countdown, setCountdown] = useState(0);
 
   useEffect(() => {
@@ -388,6 +389,7 @@ export default function App() {
         setForgotEmail('');
         setResetEmail(emailVal);
         setCountdown(60);
+        setIsOtpVerified(false);
         if (data.otp) {
           setOtp(data.otp);
         }
@@ -423,6 +425,37 @@ export default function App() {
     }
   };
 
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    if (!resetEmail) {
+      showNotification('warning', '⚠️ Cảnh báo', 'Thiếu thông tin email');
+      return;
+    }
+    if (!otp) {
+      showNotification('warning', '⚠️ Cảnh báo', 'Vui lòng nhập mã OTP');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          email: resetEmail, 
+          otp: otp.trim() 
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showNotification('success', '✅ Thành công', data.message || 'Mã OTP chính xác!');
+        setIsOtpVerified(true);
+      } else {
+        showNotification('error', '❌ Lỗi', data.detail || 'Mã OTP không chính xác hoặc đã hết hạn.');
+      }
+    } catch (err) {
+      showNotification('error', '💥 Lỗi', t.connectBackend);
+    }
+  };
+
   const handleResetSubmit = async (e) => {
     e.preventDefault();
     if (!resetEmail) {
@@ -454,6 +487,7 @@ export default function App() {
         setResetConfirmPassword('');
         setOtp('');
         setResetEmail('');
+        setIsOtpVerified(false);
         setCurrentScreen('login');
       } else {
         showNotification('error', `❌ Lỗi`, data.detail || 'Có lỗi xảy ra');
@@ -1464,44 +1498,57 @@ export default function App() {
           <div className="bg-[#111118] border border-[rgba(255,255,255,0.07)] rounded-2xl w-[400px] p-8 shadow-2xl relative">
             <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-[#4ade80] to-[#60a5fa]"></div>
             <div className="text-2xl font-extrabold text-[#e8e8f0] mb-6">{t.resetTitle}</div>
-            <form onSubmit={handleResetSubmit} className="flex flex-col gap-4">
-              <div className="rounded-xl bg-[#14141c] border border-[rgba(255,255,255,0.06)] p-4 text-[11px] text-[#7a7a9a]">
-                {lang === 'vi' 
-                  ? `Mã OTP đã được gửi đến email ${resetEmail}. Mã có hiệu lực trong 5 phút.` 
-                  : `OTP code sent to email ${resetEmail}. Valid for 5 minutes.`}
-              </div>
-              
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mã OTP (6 chữ số)' : 'OTP Code (6 digits)'}</label>
-                <div className="flex gap-2">
-                  <input required type="text" maxLength={6} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none font-mono flex-1 text-center text-lg tracking-widest" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} placeholder="123456" />
-                  
-                  <button 
-                    type="button" 
-                    disabled={countdown > 0} 
-                    onClick={handleResendOtp}
-                    className={`text-xs px-3 rounded-lg font-bold transition-all cursor-pointer ${countdown > 0 ? 'bg-[#18181f] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] cursor-not-allowed' : 'bg-[#6c5ce7] text-white hover:bg-[#5b4bc4]'}`}
-                  >
-                    {countdown > 0 
-                      ? (lang === 'vi' ? `Gửi lại (${countdown}s)` : `Resend (${countdown}s)`) 
-                      : (lang === 'vi' ? 'Gửi lại OTP' : 'Resend OTP')}
-                  </button>
+            
+            {!isOtpVerified ? (
+              <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
+                <div className="rounded-xl bg-[#14141c] border border-[rgba(255,255,255,0.06)] p-4 text-[11px] text-[#7a7a9a]">
+                  {lang === 'vi' 
+                    ? `Mã OTP đã được gửi đến email ${resetEmail}. Mã có hiệu lực trong 5 phút.` 
+                    : `OTP code sent to email ${resetEmail}. Valid for 5 minutes.`}
                 </div>
-              </div>
+                
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mã OTP (6 chữ số)' : 'OTP Code (6 digits)'}</label>
+                  <div className="flex gap-2">
+                    <input required type="text" maxLength={6} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none font-mono flex-1 text-center text-lg tracking-widest" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} placeholder="123456" />
+                    
+                    <button 
+                      type="button" 
+                      disabled={countdown > 0} 
+                      onClick={handleResendOtp}
+                      className={`text-xs px-3 rounded-lg font-bold transition-all cursor-pointer ${countdown > 0 ? 'bg-[#18181f] text-[#7a7a9a] border border-[rgba(255,255,255,0.05)] cursor-not-allowed' : 'bg-[#6c5ce7] text-white hover:bg-[#5b4bc4]'}`}
+                    >
+                      {countdown > 0 
+                        ? (lang === 'vi' ? `Gửi lại (${countdown}s)` : `Resend (${countdown}s)`) 
+                        : (lang === 'vi' ? 'Gửi lại OTP' : 'Resend OTP')}
+                    </button>
+                  </div>
+                </div>
+                <button type="submit" className="bg-[#6c5ce7] text-white text-xs font-bold py-2.5 rounded-xl cursor-pointer">
+                  {lang === 'vi' ? 'Xác thực OTP' : 'Verify OTP'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleResetSubmit} className="flex flex-col gap-4">
+                <div className="rounded-xl bg-[rgba(74,222,128,0.1)] border border-[rgba(74,222,128,0.2)] p-4 text-[11px] text-[#4ade80] text-center">
+                  {lang === 'vi' ? '✅ Xác thực OTP thành công! Vui lòng nhập mật khẩu mới.' : '✅ OTP Verified successfully! Please enter your new password.'}
+                </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mật khẩu mới' : 'New password'}</label>
-                <input required type={showRegPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
-              </div>
-              
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{t.confirmPassword}</label>
-                <input required type={showRegConfirmPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
-              </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{lang === 'vi' ? 'Mật khẩu mới' : 'New password'}</label>
+                  <input required type={showRegPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+                </div>
+                
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-[#7a7a9a] uppercase">{t.confirmPassword}</label>
+                  <input required type={showRegConfirmPassword ? 'text' : 'password'} className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2.5 text-xs text-white outline-none" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
+                </div>
 
-              <button type="submit" className="bg-[#4ade80] text-[#0a0a0f] text-xs font-bold py-2.5 rounded-xl cursor-pointer">{t.resetSubmit}</button>
-            </form>
-            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => setCurrentScreen('login')}>{t.backToLogin}</button></div>
+                <button type="submit" className="bg-[#4ade80] text-[#0a0a0f] text-xs font-bold py-2.5 rounded-xl cursor-pointer">{t.resetSubmit}</button>
+              </form>
+            )}
+            
+            <div className="text-center text-xs text-[#7a7a9a] mt-5"><button className="text-[#a29bfe] cursor-pointer hover:underline" onClick={() => { setCurrentScreen('login'); setIsOtpVerified(false); }}>{t.backToLogin}</button></div>
           </div>
         </div>
       )}
@@ -1830,7 +1877,12 @@ export default function App() {
           <div className="bg-[#111118] border border-[rgba(255,255,255,0.12)] rounded-2xl w-[520px] p-6">
             <h3 className="text-base font-bold mb-4">⚡ {t.createLink}</h3>
             <form onSubmit={handleCreateLink} className="flex flex-col gap-4">
-              <input required type="url" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={longUrl} onChange={(e) => setLongUrl(e.target.value)} placeholder={t.longUrlPlaceholder} />
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-[#7a7a9a] uppercase px-1">
+                  {lang === 'vi' ? 'Nhập liên kết gốc' : 'Enter original link'}
+                </label>
+                <input required type="url" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={longUrl} onChange={(e) => setLongUrl(e.target.value)} placeholder={t.longUrlPlaceholder} />
+              </div>
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={linkName} onChange={(e) => setLinkName(e.target.value)} placeholder={t.linkNameLabel} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customAlias} onChange={(e) => setCustomAlias(e.target.value)} placeholder={t.customAliasPlaceholder} />
               <input type="text" className="bg-[#18181f] border border-[rgba(255,255,255,0.07)] rounded-lg p-2 text-xs text-white font-mono outline-none" value={customDomain} onChange={(e) => setCustomDomain(e.target.value)} placeholder={t.domainPlaceholder} />

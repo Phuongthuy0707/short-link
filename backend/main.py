@@ -121,13 +121,13 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
         if existing_username:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tên tài khoản này đã được đăng ký sử dụng!")
     
-    existing_user = db.query(models.User).filter(models.User.email == payload.email).first()
+    existing_user = db.query(models.User).filter(models.User.email == email_clean).first()
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email này đã được đăng ký sử dụng!")
     
     hashed_pwd = utils.hash_password(payload.password)
     
-    new_user = models.User(email=payload.email, password_hash=hashed_pwd, role="member")
+    new_user = models.User(email=email_clean, password_hash=hashed_pwd, role="member")
     if hasattr(models.User, 'username'):
         setattr(new_user, 'username', payload.username)
 
@@ -139,12 +139,13 @@ def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
 # --- API ĐĂNG NHẬP (Fix ATTRIBUTE) ---
 @app.post("/api/auth/token")
 def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    username_clean = username.strip().lower()
     # Tìm kiếm linh hoạt: nếu model có `username` thì dò cả `username` hoặc `email`.
     # Nếu model không có `username`, dò theo `email`.
     if hasattr(models.User, 'username'):
-        user = db.query(models.User).filter(or_(models.User.username == username, models.User.email == username)).first()
+        user = db.query(models.User).filter(or_(models.User.username == username.strip(), models.User.email == username_clean)).first()
     else:
-        user = db.query(models.User).filter(models.User.email == username).first()
+        user = db.query(models.User).filter(models.User.email == username_clean).first()
         
     if not user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản này không tồn tại!")
@@ -208,7 +209,8 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
 
 @app.post("/api/auth/forgot")
 def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    email_clean = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email_clean).first()
     if not user:
         return {"status": "success", "message": "Nếu tài khoản tồn tại, mã OTP đặt lại mật khẩu đã được gửi."}
 
@@ -256,9 +258,26 @@ def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_d
     return response
 
 
+@app.post("/api/auth/verify-otp")
+def verify_otp(payload: schemas.VerifyOTP, db: Session = Depends(get_db)):
+    email_clean = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email_clean).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
+
+    if not user.reset_otp or user.reset_otp != payload.otp.strip():
+        raise HTTPException(status_code=400, detail="Mã OTP không chính xác")
+
+    if user.reset_otp_expires_at and user.reset_otp_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Mã OTP đã hết hạn (chỉ có hiệu lực trong 5 phút)")
+
+    return {"status": "success", "message": "Mã OTP chính xác!"}
+
+
 @app.post("/api/auth/reset")
 def reset_password(payload: schemas.ResetPassword, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    email_clean = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email_clean).first()
     if not user:
         raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
 
