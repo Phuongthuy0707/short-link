@@ -971,6 +971,12 @@ def get_all_links(workspace_id: Optional[int] = None, current_user: models.User 
         if link.status == "active" and link.expired_at and link.expired_at < datetime.utcnow():
             computed_status = "expired"
 
+        domain_name = None
+        if link.domain_id:
+            domain_obj = db.query(models.Domain).filter(models.Domain.id == link.domain_id).first()
+            if domain_obj:
+                domain_name = domain_obj.domain_name
+
         click_count = db.query(models.ClickLog).filter(models.ClickLog.link_id == link.id).count()
         result.append({
           "short_code": link.short_code,
@@ -979,7 +985,8 @@ def get_all_links(workspace_id: Optional[int] = None, current_user: models.User 
           "status": computed_status,
           "expired_at": link.expired_at.isoformat() if getattr(link, 'expired_at', None) else None,
           "clicks": click_count,
-          "date": link.created_at.strftime('%d/%m/%Y') if hasattr(link, 'created_at') and link.created_at else "12/06/2026"
+          "date": link.created_at.strftime('%d/%m/%Y') if hasattr(link, 'created_at') and link.created_at else "12/06/2026",
+          "domain": domain_name
         })
     return result
 
