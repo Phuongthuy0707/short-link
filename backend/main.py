@@ -117,7 +117,13 @@ def temp_seed_db(db: Session = Depends(get_db)):
     # 1. Find user ID for phun111@gmail.com
     user = db.query(models.User).filter(models.User.email == 'phun111@gmail.com').first()
     if not user:
-        return {"status": "error", "message": "User 'phun111@gmail.com' not found!"}
+        hashed_pwd = utils.hash_password("123456")
+        user = models.User(email='phun111@gmail.com', password_hash=hashed_pwd, role="member")
+        if hasattr(models.User, 'username'):
+            setattr(user, 'username', 'phun111')
+        db.add(user)
+        db.commit()
+        db.refresh(user)
     user_id = user.id
 
     # 2. Update creation date of all links belonging to phun111@gmail.com
