@@ -441,7 +441,10 @@ def shorten_url(request: Request, payload: schemas.ShortenRequest, current_user:
     if current_user:
         create_audit_log(db, current_user.id, "create_link", short_code, f"Tạo liên kết rút gọn cho {new_link.original_url}")
 
-    short_url = f"https://{final_domain_name}/{short_code}" if final_domain_name else f"http://localhost:8000/{short_code}"
+    base_url = str(request.base_url).rstrip("/")
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        base_url = "https://short-link-tqp6.onrender.com"
+    short_url = f"https://{final_domain_name}/{short_code}" if final_domain_name else f"{base_url}/{short_code}"
     return {
         "status": "success",
         "message": "Tạo liên kết rút gọn thành công!",
@@ -614,6 +617,8 @@ def get_qr_code(
         target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
     else:
         base_url = str(request.base_url).rstrip("/")
+        if "localhost" in base_url or "127.0.0.1" in base_url:
+            base_url = "https://short-link-tqp6.onrender.com"
         target_url = f"{base_url}/{short_code}"
         
     qr_stream = utils.generate_qrcode_stream(target_url, fill_color=fill_color, back_color=back_color, format=format)
@@ -642,6 +647,8 @@ async def customize_qr_code(
         target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
     else:
         base_url = str(request.base_url).rstrip("/")
+        if "localhost" in base_url or "127.0.0.1" in base_url:
+            base_url = "https://short-link-tqp6.onrender.com"
         target_url = f"{base_url}/{short_code}"
         
     qr_stream = utils.generate_qrcode_stream(

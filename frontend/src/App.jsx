@@ -2264,7 +2264,8 @@ export default function App() {
                           <button
                             className="bg-[#18181f] px-3 py-1 border border-[rgba(255,255,255,0.1)] text-xs rounded cursor-pointer hover:bg-[rgba(108,92,231,0.1)] hover:text-[#a29bfe] transition-colors"
                             onClick={() => {
-                              navigator.clipboard.writeText(`${API_URL}/${link.short_code}`);
+                              const domain = link.domain ? `https://${link.domain}` : "https://short-link-tqp6.onrender.com";
+                              navigator.clipboard.writeText(`${domain}/${link.short_code}`);
                               showNotification('success', '📋 Thành Công', t.linkCopied);
                             }}
                           >
@@ -2855,7 +2856,7 @@ export default function App() {
             <div className="bg-white p-2 rounded-lg"><img src={`${API_URL}/api/qrcode/${selectedShortCode}`} alt="QR" className="w-[120px] h-[120px]" /></div>
             <div className="w-full flex items-center bg-[#18181f] p-1.5 rounded-lg border border-[rgba(255,255,255,0.1)]">
               <input readOnly type="text" className="bg-transparent text-xs text-[#a29bfe] font-mono flex-1 px-2 outline-none" value={createdShortUrl} />
-              <button className="bg-[#6c5ce7] px-3 py-1 rounded text-xs text-white font-semibold cursor-pointer" onClick={() => { navigator.clipboard.writeText(`${API_URL}/${selectedShortCode}`); showNotification('success', '📋 Thành Công', t.linkCopied); }}>{t.copy}</button>
+              <button className="bg-[#6c5ce7] px-3 py-1 rounded text-xs text-white font-semibold cursor-pointer" onClick={() => { navigator.clipboard.writeText(createdShortUrl); showNotification('success', '📋 Thành Công', t.linkCopied); }}>{t.copy}</button>
             </div>
             <button className="w-full bg-[#18181f] text-xs py-2 rounded-lg text-[#7a7a9a]" onClick={() => { setIsSuccessOpen(false); setCreatedShortUrl(''); }}>{t.close}</button>
           </div>
