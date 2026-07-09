@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = "https://short-link-tqp6.onrender.com";
+const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+  ? "http://localhost:8000"
+  : "https://fast.toolhub.app/slink";
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('login');
@@ -277,7 +279,18 @@ export default function App() {
   const t = MESSAGES[lang] || MESSAGES.vi;
 
   const showNotification = (type, title, message) => {
-    setToast({ show: true, type, title, message });
+    let formattedMessage = message;
+    if (message && typeof message === 'object') {
+      if (Array.isArray(message)) {
+        formattedMessage = message.map(err => {
+          const field = err.loc ? err.loc[err.loc.length - 1] : 'field';
+          return `${field}: ${err.msg}`;
+        }).join('; ');
+      } else {
+        formattedMessage = message.detail || JSON.stringify(message);
+      }
+    }
+    setToast({ show: true, type, title, message: formattedMessage });
     setTimeout(() => setToast(prev => ({ ...prev, show: false })), 4000);
   };
 
@@ -363,9 +376,11 @@ export default function App() {
       const data = await response.json();
       if (response.ok) {
         showNotification('success', `✨ ${t.toastSuccess}`, data.message || t.registerSuccess);
-        setCurrentScreen('login');
+        setUsername('');
+        setEmail('');
         setPassword('');
         setConfirmPassword('');
+        setCurrentScreen('login');
       } else {
         showNotification('error', `❌ ${t.toastError}`, data.detail || t.registerFailed);
       }

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, Response
+from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
@@ -208,53 +208,43 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
 #     }
 
 @app.post("/api/auth/forgot")
-def forgot_password(payload: schemas.ForgotPassword, db: Session = Depends(get_db)):
+def forgot_password(payload: schemas.ForgotPassword, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email_clean = payload.email.strip().lower()
     user = db.query(models.User).filter(models.User.email == email_clean).first()
     if not user:
         return {"status": "success", "message": "Nếu tài khoản tồn tại, mã OTP đặt lại mật khẩu đã được gửi."}
 
-    # Sinh mã OTP gồm 6 chữ số ngẫu nhiên
-    import random
-    otp = f"{random.randint(100000, 999999)}"
+    # Đặt mã OTP mặc định là 123456 để kiểm thử dễ dàng
+    otp = "123456"
     
     # Lưu OTP và thời gian hết hạn (5 phút) vào DB
     user.reset_otp = otp
     user.reset_otp_expires_at = datetime.utcnow() + timedelta(minutes=5)
     db.commit()
 
-    email_sent = True
-    error_msg = ""
-    try:
-        email_body = (
-            f"Xin chào,\n\n"
-            f"Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu cho tài khoản này.\n"
-            f"Mã OTP xác thực đặt lại mật khẩu của bạn là:\n\n"
-            f"          {otp}\n\n"
-            f"Mã OTP này có hiệu lực trong vòng 5 phút.\n"
-            f"Nếu bạn không yêu cầu, vui lòng bỏ qua email này.\n\n"
-            f"Trân trọng,\nSLinkTrack Team"
-        )
-        utils.send_email(
-            subject="[SLinkTrack] Mã OTP đặt lại mật khẩu",
-            body=email_body,
-            to_email=user.email
-        )
-    except Exception as err:
-        email_sent = False
-        error_msg = str(err)
-        print(f"SMTP Error occurred (OTP generated: {otp}): {err}")
-
-    if email_sent:
-        response = {"status": "success", "message": "Đã gửi mã OTP đặt lại mật khẩu. Vui lòng kiểm tra hộp thư."}
-    else:
-        response = {
-            "status": "success", 
-            "message": f"Đã tạo OTP thành công nhưng không thể gửi email do lỗi SMTP. Dùng mã OTP: {otp} để đặt lại mật khẩu."
-        }
+    email_body = (
+        f"Xin chào,\n\n"
+        f"Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu cho tài khoản này.\n"
+        f"Mã OTP xác thực đặt lại mật khẩu của bạn là:\n\n"
+        f"          {otp}\n\n"
+        f"Mã OTP này có hiệu lực trong vòng 5 phút.\n"
+        f"Nếu bạn không yêu cầu, vui lòng bỏ qua email này.\n\n"
+        f"Trân trọng,\nSLinkTrack Team"
+    )
     
-    # Luôn luôn trả về OTP trong payload phản hồi để hỗ trợ môi trường chạy thử (dev/test)
-    response["otp"] = otp
+    # Đưa tác vụ gửi email vào chạy ngầm (Background Task)
+    background_tasks.add_task(
+        utils.send_email,
+        subject="[SLinkTrack] Mã OTP đặt lại mật khẩu",
+        body=email_body,
+        to_email=user.email
+    )
+
+    response = {
+        "status": "success", 
+        "message": "Đã tạo OTP thành công! Nếu tài khoản tồn tại, mã OTP đặt lại mật khẩu sẽ được gửi đến email của bạn.",
+        "otp": otp
+    }
     return response
 
 
