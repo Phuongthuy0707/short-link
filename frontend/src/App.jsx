@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 
 const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
   ? "http://localhost:8000"
@@ -281,6 +282,48 @@ export default function App() {
   const [qrBackColor, setQrBackColor] = useState('#ffffff');
   const [qrLogoFile, setQrLogoFile] = useState(null);
   const [qrPreviewUrl, setQrPreviewUrl] = useState('');
+  const [successQrDataUrl, setSuccessQrDataUrl] = useState('');
+
+  const generateFrontendQr = async (text, fillColor, backColor, logoFile) => {
+    if (!text) return '';
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 300;
+    
+    await QRCode.toCanvas(canvas, text, {
+      width: 300,
+      margin: 1,
+      color: {
+        dark: fillColor || '#000000',
+        light: backColor || '#ffffff'
+      },
+      errorCorrectionLevel: 'H'
+    });
+    
+    if (logoFile) {
+      await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const ctx = canvas.getContext('2d');
+            const size = canvas.width * 0.22;
+            const x = (canvas.width - size) / 2;
+            const y = (canvas.height - size) / 2;
+            ctx.fillStyle = backColor || '#ffffff';
+            ctx.fillRect(x - 2, y - 2, size + 4, size + 4);
+            ctx.drawImage(img, x, y, size, size);
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(logoFile);
+      });
+    }
+    return canvas.toDataURL('image/png');
+  };
 
   // Bot Filtering State
   const [excludeBots, setExcludeBots] = useState(true);
@@ -303,65 +346,101 @@ export default function App() {
   const [passwordGateInput, setPasswordGateInput] = useState('');
   const [passwordGateError, setPasswordGateError] = useState('');
 
-  const fetchQrPreview = async () => {
+  // Hook sinh QR code cho modal thanh cong
+  useEffect(() => {
+    if (isSuccessOpen && createdShortUrl) {
+      let targetUrl = createdShortUrl;
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+        targetUrl = "https://" + targetUrl;
+      }
+      setSuccessQrDataUrl('loading');
+      QRCode.toDataURL(targetUrl, {
+        width: 256,
+        margin: 1,
+        errorCorrectionLevel: 'M'
+      })
+      .then(url => {
+        setSuccessQrDataUrl(url);
+      })
+      .catch(err => {
+        console.error("Lỗi tạo QR thành công:", err);
+        setSuccessQrDataUrl('error');
+      });
+    } else {
+      setSuccessQrDataUrl('');
+    }
+  }, [isSuccessOpen, createdShortUrl]);
+
+  const updateQrPreview = async () => {
     if (!selectedShortCode) return;
     try {
-      const formData = new FormData();
-      formData.append('fill_color', qrFillColor);
-      formData.append('back_color', qrBackColor);
-      if (qrLogoFile) {
-        formData.append('logo', qrLogoFile);
-      }
-      formData.append('format', 'png');
+      setQrPreviewUrl('loading');
+      const currentLink = links.find(l => l.short_code === selectedShortCode);
+      const domain = currentLink?.domain ? `https://${currentLink.domain}` : "https://short-link-tqp6.onrender.com";
+      const fullShortUrl = `${domain}/${selectedShortCode}`;
       
-      const response = await fetch(`${API_URL}/api/qrcode/${selectedShortCode}/custom`, {
-        method: 'POST',
-        body: formData
-      });
-      if (response.ok) {
-        const blob = await response.blob();
-        if (qrPreviewUrl) {
-          URL.revokeObjectURL(qrPreviewUrl);
-        }
-        const url = URL.createObjectURL(blob);
-        setQrPreviewUrl(url);
-      }
+      const dataUrl = await generateFrontendQr(fullShortUrl, qrFillColor, qrBackColor, qrLogoFile);
+      setQrPreviewUrl(dataUrl);
     } catch (err) {
-      console.error("Lỗi tải QR Code custom:", err);
+      console.error("Lỗi tạo preview QR:", err);
+      setQrPreviewUrl('error');
     }
   };
 
   useEffect(() => {
     if (isQrOpen && selectedShortCode) {
-      fetchQrPreview();
+      updateQrPreview();
     } else {
-      if (qrPreviewUrl) {
-        URL.revokeObjectURL(qrPreviewUrl);
-      }
       setQrPreviewUrl('');
     }
-  }, [qrFillColor, qrBackColor, qrLogoFile, selectedShortCode, isQrOpen]);
+  }, [qrFillColor, qrBackColor, qrLogoFile, selectedShortCode, isQrOpen, links]);
 
   const downloadCustomQr = async (format = 'png') => {
+    if (!selectedShortCode) return;
     try {
-      const formData = new FormData();
-      formData.append('fill_color', qrFillColor);
-      formData.append('back_color', qrBackColor);
-      if (qrLogoFile) {
-        formData.append('logo', qrLogoFile);
-      }
-      formData.append('format', format);
+      const currentLink = links.find(l => l.short_code === selectedShortCode);
+      const domain = currentLink?.domain ? `https://${currentLink.domain}` : "https://short-link-tqp6.onrender.com";
+      const fullShortUrl = `${domain}/${selectedShortCode}`;
       
-      const response = await fetch(`${API_URL}/api/qrcode/${selectedShortCode}/custom`, {
-        method: 'POST',
-        body: formData
-      });
-      if (response.ok) {
-        const blob = await response.blob();
+      if (format === 'png') {
+        const dataUrl = await generateFrontendQr(fullShortUrl, qrFillColor, qrBackColor, qrLogoFile);
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `qrcode_${selectedShortCode}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } else if (format === 'svg') {
+        let svgString = await QRCode.toString(fullShortUrl, {
+          type: 'svg',
+          width: 300,
+          margin: 1,
+          color: {
+            dark: qrFillColor || '#000000',
+            light: qrBackColor || '#ffffff'
+          },
+          errorCorrectionLevel: 'H'
+        });
+        
+        if (qrLogoFile) {
+          const logoBase64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(qrLogoFile);
+          });
+          const logoSize = 300 * 0.22;
+          const x = (300 - logoSize) / 2;
+          const y = (300 - logoSize) / 2;
+          const bgRect = `<rect x="${x - 2}" y="${y - 2}" width="${logoSize + 4}" height="${logoSize + 4}" fill="${qrBackColor || '#ffffff'}" />`;
+          const imageTag = `<image x="${x}" y="${y}" width="${logoSize}" height="${logoSize}" href="${logoBase64}" />`;
+          svgString = svgString.replace('</svg>', `${bgRect}${imageTag}</svg>`);
+        }
+        
+        const blob = new Blob([svgString], { type: 'image/svg+xml' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `qrcode_${selectedShortCode}.${format}`;
+        a.download = `qrcode_${selectedShortCode}.svg`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -2853,7 +2932,15 @@ export default function App() {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111118] border border-[#55efc4] rounded-2xl w-[400px] p-6 flex flex-col items-center gap-4">
             <div className="text-sm font-bold text-[#55efc4]">✓ {t.createSuccess || 'Created successfully!'}</div>
-            <div className="bg-white p-2 rounded-lg"><img src={`${API_URL}/api/qrcode/${selectedShortCode}`} alt="QR" className="w-[120px] h-[120px]" /></div>
+            <div className="bg-white p-2 rounded-lg">
+              {successQrDataUrl === 'loading' ? (
+                <div className="w-[120px] h-[120px] flex items-center justify-center text-xs text-gray-500 font-sans">{lang === 'vi' ? 'Đang tạo...' : 'Generating...'}</div>
+              ) : successQrDataUrl === 'error' || !successQrDataUrl ? (
+                <div className="w-[120px] h-[120px] flex items-center justify-center text-xs text-red-500 font-sans">{lang === 'vi' ? 'Lỗi tạo QR' : 'QR Error'}</div>
+              ) : (
+                <img src={successQrDataUrl} alt="QR Code" className="w-[120px] h-[120px]" />
+              )}
+            </div>
             <div className="w-full flex items-center bg-[#18181f] p-1.5 rounded-lg border border-[rgba(255,255,255,0.1)]">
               <input readOnly type="text" className="bg-transparent text-xs text-[#a29bfe] font-mono flex-1 px-2 outline-none" value={createdShortUrl} />
               <button className="bg-[#6c5ce7] px-3 py-1 rounded text-xs text-white font-semibold cursor-pointer" onClick={() => { navigator.clipboard.writeText(createdShortUrl); showNotification('success', '📋 Thành Công', t.linkCopied); }}>{t.copy}</button>
@@ -2912,15 +2999,25 @@ export default function App() {
 
             {/* QR Preview with fallback */}
             <div className="bg-white p-3 rounded-xl flex items-center justify-center w-[174px] h-[174px]">
-              <img
-                src={qrPreviewUrl || `${API_URL}/api/qrcode/${selectedShortCode}`}
-                alt="QR"
-                className="w-[150px] h-[150px]"
-              />
+              {qrPreviewUrl === 'loading' ? (
+                <div className="w-[150px] h-[150px] flex items-center justify-center text-xs text-gray-500 font-sans">{lang === 'vi' ? 'Đang tạo...' : 'Generating...'}</div>
+              ) : qrPreviewUrl === 'error' || !qrPreviewUrl ? (
+                <div className="w-[150px] h-[150px] flex items-center justify-center text-xs text-red-500 font-sans">{lang === 'vi' ? 'Không thể tạo mã QR' : 'Cannot create QR'}</div>
+              ) : (
+                <img
+                  src={qrPreviewUrl}
+                  alt="QR"
+                  className="w-[150px] h-[150px]"
+                />
+              )}
             </div>
 
             <div className="text-xs font-mono bg-[#18181f] py-1 px-3 border border-[rgba(255,255,255,0.05)] rounded w-full text-center truncate">
-              {API_URL.replace("https://", "").replace("http://", "")}/{selectedShortCode}
+              {(() => {
+                const currentLink = links.find(l => l.short_code === selectedShortCode);
+                const domain = currentLink?.domain || "short-link-tqp6.onrender.com";
+                return `${domain}/${selectedShortCode}`;
+              })()}
             </div>
 
             {/* Download buttons */}
