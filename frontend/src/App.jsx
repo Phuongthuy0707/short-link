@@ -2338,15 +2338,7 @@ export default function App() {
                       <tr key={idx} className="border-b border-[rgba(255,255,255,0.04)] cursor-pointer" onClick={() => openLinkDetails(link.short_code)}>
                         <td className="p-4 text-xs font-mono text-[#a29bfe]">
                           <div className="flex items-center flex-wrap gap-1">
-                            <a
-                              href={`https://short-link-tqp6.onrender.com/${link.short_code}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="underline hover:text-[#55efc4]"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {link.domain ? `${link.domain}/${link.short_code}` : `short-link-tqp6.onrender.com/${link.short_code}`}
-                            </a>
+                            <span>{link.domain ? `${link.domain}/${link.short_code}` : `short-link-tqp6.onrender.com/${link.short_code}`}</span>
                             {link.password_hash && <span className="ml-1.5 text-xs text-[#eccc68]" title={lang === 'vi' ? 'Có mật khẩu bảo vệ' : 'Password protected'}>🔒</span>}
                             {link.utm_source && (
                               <span className="ml-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#74b9ff]/20 text-[#74b9ff] uppercase" title={`UTM: source=${link.utm_source}, medium=${link.utm_medium}, campaign=${link.utm_campaign}`}>
