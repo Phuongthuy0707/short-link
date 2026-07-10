@@ -81,6 +81,9 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Hệ thống Shortlink & Analytics nâng cao", root_path="/slink")
 app.state.limiter = limiter
 
+from routers.api import dev_seed
+app.include_router(dev_seed.router)
+
 @app.exception_handler(RateLimitExceeded)
 def rate_limit_custom_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
