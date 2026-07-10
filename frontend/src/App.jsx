@@ -325,6 +325,34 @@ export default function App() {
     return canvas.toDataURL('image/png');
   };
 
+  const copyRichLink = async (displayUrl, actualUrl) => {
+    try {
+      if (navigator.clipboard && window.ClipboardItem && navigator.clipboard.write) {
+        const htmlText = `<a href="${actualUrl}">${displayUrl}</a>`;
+        const plainText = actualUrl;
+        
+        const blobHtml = new Blob([htmlText], { type: 'text/html' });
+        const blobPlain = new Blob([plainText], { type: 'text/plain' });
+        
+        const item = new ClipboardItem({
+          'text/html': blobHtml,
+          'text/plain': blobPlain
+        });
+        
+        await navigator.clipboard.write([item]);
+      } else {
+        await navigator.clipboard.writeText(actualUrl);
+      }
+    } catch (err) {
+      console.error("Lỗi sao chép rich link:", err);
+      try {
+        await navigator.clipboard.writeText(actualUrl);
+      } catch (fallbackErr) {
+        console.error("Lỗi fallback copy:", fallbackErr);
+      }
+    }
+  };
+
   // Bot Filtering State
   const [excludeBots, setExcludeBots] = useState(true);
 
@@ -2310,7 +2338,15 @@ export default function App() {
                       <tr key={idx} className="border-b border-[rgba(255,255,255,0.04)] cursor-pointer" onClick={() => openLinkDetails(link.short_code)}>
                         <td className="p-4 text-xs font-mono text-[#a29bfe]">
                           <div className="flex items-center flex-wrap gap-1">
-                            <span>{link.domain ? `${link.domain}/${link.short_code}` : `/${link.short_code}`}</span>
+                            <a
+                              href={`https://short-link-tqp6.onrender.com/${link.short_code}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline hover:text-[#55efc4]"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {link.domain ? `${link.domain}/${link.short_code}` : `short-link-tqp6.onrender.com/${link.short_code}`}
+                            </a>
                             {link.password_hash && <span className="ml-1.5 text-xs text-[#eccc68]" title={lang === 'vi' ? 'Có mật khẩu bảo vệ' : 'Password protected'}>🔒</span>}
                             {link.utm_source && (
                               <span className="ml-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#74b9ff]/20 text-[#74b9ff] uppercase" title={`UTM: source=${link.utm_source}, medium=${link.utm_medium}, campaign=${link.utm_campaign}`}>
@@ -2342,9 +2378,10 @@ export default function App() {
                         <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
                           <button
                             className="bg-[#18181f] px-3 py-1 border border-[rgba(255,255,255,0.1)] text-xs rounded cursor-pointer hover:bg-[rgba(108,92,231,0.1)] hover:text-[#a29bfe] transition-colors"
-                            onClick={() => {
-                              const domain = link.domain ? `https://${link.domain}` : "https://short-link-tqp6.onrender.com";
-                              navigator.clipboard.writeText(`${domain}/${link.short_code}`);
+                            onClick={async () => {
+                              const displayUrl = link.domain ? `${link.domain}/${link.short_code}` : `short-link-tqp6.onrender.com/${link.short_code}`;
+                              const actualUrl = `https://short-link-tqp6.onrender.com/${link.short_code}`;
+                              await copyRichLink(displayUrl, actualUrl);
                               showNotification('success', '📋 Thành Công', t.linkCopied);
                             }}
                           >
