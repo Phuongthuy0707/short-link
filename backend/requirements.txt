@@ -32,3 +32,4 @@ python-dotenv
 geoip2
 psycopg2-binary
 faker
+slowapi
