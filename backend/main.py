@@ -616,13 +616,10 @@ def get_qr_code(
     if not link:
         raise HTTPException(status_code=404, detail="Không tìm thấy đường dẫn tương ứng để tạo QR!")
         
-    if link.domain:
-        target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
-    else:
-        base_url = str(request.base_url).rstrip("/")
-        if "localhost" in base_url or "127.0.0.1" in base_url:
-            base_url = "https://short-link-tqp6.onrender.com"
-        target_url = f"{base_url}/{short_code}"
+    base_url = str(request.base_url).rstrip("/")
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        base_url = "https://short-link-tqp6.onrender.com"
+    target_url = f"{base_url}/{short_code}"
         
     qr_stream = utils.generate_qrcode_stream(target_url, fill_color=fill_color, back_color=back_color, format=format)
     media_type = "image/svg+xml" if format.lower() == "svg" else "image/png"
@@ -646,13 +643,10 @@ async def customize_qr_code(
     if logo and logo.filename:
         logo_bytes = await logo.read()
         
-    if link.domain:
-        target_url = f"https://{link.domain}/{short_code}" if request.url.scheme == "https" else f"http://{link.domain}/{short_code}"
-    else:
-        base_url = str(request.base_url).rstrip("/")
-        if "localhost" in base_url or "127.0.0.1" in base_url:
-            base_url = "https://short-link-tqp6.onrender.com"
-        target_url = f"{base_url}/{short_code}"
+    base_url = str(request.base_url).rstrip("/")
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        base_url = "https://short-link-tqp6.onrender.com"
+    target_url = f"{base_url}/{short_code}"
         
     qr_stream = utils.generate_qrcode_stream(
         target_url, 

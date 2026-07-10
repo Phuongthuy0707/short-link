@@ -376,11 +376,8 @@ export default function App() {
 
   // Hook sinh QR code cho modal thanh cong
   useEffect(() => {
-    if (isSuccessOpen && createdShortUrl) {
-      let targetUrl = createdShortUrl;
-      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
-        targetUrl = "https://" + targetUrl;
-      }
+    if (isSuccessOpen && selectedShortCode) {
+      const targetUrl = "https://short-link-tqp6.onrender.com/" + selectedShortCode;
       setSuccessQrDataUrl('loading');
       QRCode.toDataURL(targetUrl, {
         width: 256,
@@ -403,9 +400,7 @@ export default function App() {
     if (!selectedShortCode) return;
     try {
       setQrPreviewUrl('loading');
-      const currentLink = links.find(l => l.short_code === selectedShortCode);
-      const domain = currentLink?.domain ? `https://${currentLink.domain}` : "https://short-link-tqp6.onrender.com";
-      const fullShortUrl = `${domain}/${selectedShortCode}`;
+      const fullShortUrl = "https://short-link-tqp6.onrender.com/" + selectedShortCode;
       
       const dataUrl = await generateFrontendQr(fullShortUrl, qrFillColor, qrBackColor, qrLogoFile);
       setQrPreviewUrl(dataUrl);
@@ -426,9 +421,7 @@ export default function App() {
   const downloadCustomQr = async (format = 'png') => {
     if (!selectedShortCode) return;
     try {
-      const currentLink = links.find(l => l.short_code === selectedShortCode);
-      const domain = currentLink?.domain ? `https://${currentLink.domain}` : "https://short-link-tqp6.onrender.com";
-      const fullShortUrl = `${domain}/${selectedShortCode}`;
+      const fullShortUrl = "https://short-link-tqp6.onrender.com/" + selectedShortCode;
       
       if (format === 'png') {
         const dataUrl = await generateFrontendQr(fullShortUrl, qrFillColor, qrBackColor, qrLogoFile);
